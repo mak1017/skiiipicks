@@ -18,7 +18,8 @@ GREEN, YELLOW = 0.70, 0.58          # winner pick: chance the picked team wins
 ATS_GREEN, ATS_YELLOW = 0.56, 0.524  # spread lean: chance to cover (52.4% = break-even at -110)
 COLS = ["source", "sport", "date", "home", "away", "pick", "win_prob", "rating", "ml_odds",
         "ats_side", "ats_line", "cover_prob", "ats_rating", "logged", "home_pts", "away_pts",
-        "ml_result", "ml_units", "ats_result", "ats_units"]
+        "ml_result", "ml_units", "ats_result", "ats_units", "top10"]
+INJ_PENALTY = 0.04  # ranking only: a pick whose own key player is Out/Doubtful drops in the Top 10
 
 
 def rating(p):
@@ -92,12 +93,45 @@ def update_log(path, live_rows, results, today=None):
         log = pd.concat([keep_old, new], ignore_index=True)
     else:
         log = new
+    for c in COLS:
+        if c not in log.columns:
+            log[c] = None
     log = log.drop_duplicates(key, keep="last")
     log = grade(log, results)
     log = log.sort_values(["date", "sport", "home"]).reset_index(drop=True)
     if path:
         log[COLS].to_csv(path, index=False)
     return log
+
+
+def top10_today(games, today):
+    """games: dicts with sport, date, home, away, win_home, notes."""
+    import re
+    cands = []
+    for g in games:
+        if g["date"] < today:
+            continue
+        p = max(g["win_home"], 1 - g["win_home"])
+        pick = g["home"] if g["win_home"] >= 0.5 else g["away"]
+        hurt = [n for n in (g.get("notes") or []) if n.startswith(pick + ":") and re.search(r"\((Out|Doubtful)\)", n)]
+        cands.append({**g, "pick": pick, "conf": p, "score": p - (INJ_PENALTY if hurt else 0), "injury_flag": bool(hurt)})
+    # best 10 across today and the next 2 days; reach further out only if that window has fewer than 10 games
+    end = (pd.Timestamp(today) + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
+    win = [c for c in cands if c["date"] <= end]
+    if len(win) < 10:
+        later = sorted([c for c in cands if c["date"] > end], key=lambda c: c["date"])
+        win += later[: 10 - len(win)]
+    return sorted(win, key=lambda c: (-c["score"], c["date"]))[:10]
+
+
+def mark_backtest_top10(df):
+    """Daily top 10 across sports by win chance, for the backtested track record."""
+    if df.empty:
+        return df
+    df = df.copy()
+    df["top10"] = df.groupby("date")["win_prob"].rank(ascending=False, method="first")
+    df.loc[df["top10"] > 10, "top10"] = None
+    return df
 
 
 def _tally(d):
@@ -127,6 +161,8 @@ def summarize(df):
                                    "ats_by_rating": {r: _tally(d[d["ats_rating"] == r]) for r in ("green", "yellow", "red")},
                                    "curve": _curve(d), "recent": _recent(d)}
         blk["by_rating"] = {r: _tally(s[s["rating"] == r]) for r in ("green", "yellow", "red")}
+        t10 = s[s["top10"].notna()] if "top10" in s else s.iloc[0:0]
+        blk["top10"] = {"all": _tally(t10), "curve": _curve(t10)}
         blk["curve"] = _curve(s)
         out[src] = blk
     return out

@@ -365,8 +365,20 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
             out.pop("mlb", None)
 
     results = pd.concat(RES, ignore_index=True) if RES else pd.DataFrame(columns=["sport", "date", "home", "away", "home_pts", "away_pts"])
+    # Top 10 for today (Eastern time), across sports
+    from zoneinfo import ZoneInfo
+    today_et = __import__("datetime").datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    allg = [{**u, "sport": sp} for sp in ("nfl", "cfb", "nba", "mlb") for u in (out.get(sp) or {}).get("upcoming", [])]
+    top = pnl.top10_today(allg, today_et)
+    out["top10"] = [{"rank": i + 1, "sport": t["sport"], "date": t["date"], "home": t["home"], "away": t["away"],
+                     "pick": t["pick"], "conf": t["conf"], "injury_flag": t["injury_flag"]} for i, t in enumerate(top)]
+    out["today"] = today_et
+    rank = {(t["sport"], t["date"], t["home"], t["away"]): t["rank"] for t in out["top10"]}
+    for r in LIVE:
+        r["top10"] = rank.get((r["sport"], r["date"], r["home"], r["away"]))
     log = pnl.update_log(log_path, LIVE, results)
     back = pnl.grade(pd.DataFrame(BACK, columns=pnl.COLS).drop_duplicates(["sport", "date", "home", "away"]), results) if BACK else pd.DataFrame(columns=pnl.COLS)
+    back = pnl.mark_backtest_top10(back)
     out["pnl"] = pnl.summarize(pd.concat([log, back], ignore_index=True))
     out["pnl"]["live_since"] = str(log["logged"].min()) if not log.empty else date.today().isoformat()
     for sp in ("nfl", "cfb", "nba", "mlb"):

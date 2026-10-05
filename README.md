@@ -77,6 +77,12 @@ scored against season-average lines, which are softer than real ones.
 - "This season, backtested" is rebuilt every time and kept separate from live results.
 - On GitHub, use `workflow-for-github.yml` so the log is saved between runs (it needs `contents: write`).
 
+## Top 10 picks
+
+The 10 most confident winner picks across all sports over the next three days (Eastern time),
+moved down a little when the picked team has a key player Out or Doubtful. The list is saved in the
+picks log, so the Top 10 has its own live record, plus a backtested record (the daily top 10 by win chance).
+
 ## Injuries (`injuries.py`)
 
 NFL and NBA injury reports, from ESPN's live injury page when it responds, otherwise the daily
