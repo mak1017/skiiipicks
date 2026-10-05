@@ -179,7 +179,7 @@ tbody tr:last-child td{border-bottom:none}
 <main class="wrap">
   <header class="brand"><h1>makskiiiiipicks</h1><span>Projections from the skiiipicks model: NFL, college football, NBA and MLB</span></header>
   <section aria-labelledby="t10h" style="margin-top:14px">
-    <h2 id="t10h" style="margin-top:4px">Top 10 picks</h2>
+    <h2 id="t10h" style="margin-top:4px">Today's top picks</h2>
     <p class="sub" id="t10S"></p>
     <ol class="t10" id="t10"></ol>
     <p class="sub" id="t10R" style="margin-top:8px"></p>
@@ -639,13 +639,18 @@ function dayLabel(d){
 }
 function renderTop10(){
   const L=(D.top10||[]).filter(t=>D[t.sport]);
-  if (!L.length){ $("t10S").textContent=""; $("t10").innerHTML=`<li><div class="empty" style="border:0">No games on the schedule in the next few days.</div></li>`; $("t10R").textContent=""; return; }
-  const weak=L.filter(t=>t.conf<0.58).length;
-  $("t10S").textContent=`The model's most confident winners across every sport over the next three days. Tap one to open it.${weak>=5?" It's a light stretch of games, so several of these are close to coin flips; the color tells you which.":""}`;
-  $("t10").innerHTML=L.map((t,i)=>{const opp=t.pick===t.home?t.away:t.home, rt=rateOf(t.conf);
+  const todayTxt=new Date((D.today||"")+"T12:00:00").toLocaleDateString([], {weekday:"long", month:"long", day:"numeric"});
+  if (!L.length){
+    $("t10S").textContent=todayTxt;
+    $("t10").innerHTML=`<li><div class="empty" style="border:0">No games today.${D.next_game_day?` The next games are ${esc(dayLabel(D.next_game_day).toLowerCase()==="tomorrow"?"tomorrow":new Date(D.next_game_day+"T12:00:00").toLocaleDateString([], {weekday:"long", month:"short", day:"numeric"}))}.`:""}</div></li>`;
+  } else {
+    const weak=L.filter(t=>t.conf<0.58).length;
+    $("t10S").textContent=`${todayTxt}. The model's ${L.length<10?L.length+" picks":"10 most confident winners"} for today across every sport. Tap one to open it.${L.length<10?" There are only "+L.length+" games today.":""}${weak>=Math.ceil(L.length/2)?" Several are close to coin flips; the color tells you which.":""}`;
+  }
+  if (L.length) $("t10").innerHTML=L.map((t,i)=>{const opp=t.pick===t.home?t.away:t.home, rt=rateOf(t.conf);
     return `<li><button data-i="${i}"><span class="n">${t.rank}</span>
       <span class="pk"><span class="dot r-${rt}"></span>${esc(t.pick)}</span><span class="pc">${(t.conf*100).toFixed(0)}%</span>
-      <span class="mt">over ${esc(opp)}, ${esc(D[t.sport].label)}, ${esc(dayLabel(t.date))}${t.injury_flag?'. <span class="warn">Key player out</span>':""}</span></button></li>`;}).join("");
+      <span class="mt">over ${esc(opp)}, ${esc(D[t.sport].label)}${t.injury_flag?'. <span class="warn">Key player out</span>':""}</span></button></li>`;}).join("");
   $("t10").querySelectorAll("button").forEach(b=>b.onclick=()=>{const t=L[+b.dataset.i];
     S.sport=t.sport; renderTabs(); S.home=t.home; S.away=t.away; S.neutral=false;
     const g=(D[t.sport].upcoming||[]).find(x=>x.home===t.home&&x.away===t.away); if(g) S.neutral=!!g.neutral;
@@ -655,7 +660,7 @@ function renderTop10(){
   if (lv && lv.picks) parts.push(`Live: ${lv.w}-${lv.l} (${pct(lv)})`);
   else parts.push(`Live tracking: ${lv&&lv.pending?lv.pending+" picks waiting on results":"starts with these picks"}`);
   if (bt && bt.picks) parts.push(`backtested: ${bt.w}-${bt.l} (${pct(bt)}) across ${bt.picks.toLocaleString()} past picks`);
-  $("t10R").textContent=`Top 10 track record. ${parts.join("; ")}.`;
+  $("t10R").textContent=`Daily top picks track record. ${parts.join("; ")}.`;
 }
 
 function renderPR(){

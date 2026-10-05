@@ -373,6 +373,8 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
     out["top10"] = [{"rank": i + 1, "sport": t["sport"], "date": t["date"], "home": t["home"], "away": t["away"],
                      "pick": t["pick"], "conf": t["conf"], "injury_flag": t["injury_flag"]} for i, t in enumerate(top)]
     out["today"] = today_et
+    nxt = sorted({g["date"] for g in allg if g["date"] > today_et})
+    out["next_game_day"] = nxt[0] if nxt else None
     rank = {(t["sport"], t["date"], t["home"], t["away"]): t["rank"] for t in out["top10"]}
     for r in LIVE:
         r["top10"] = rank.get((r["sport"], r["date"], r["home"], r["away"]))

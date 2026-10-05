@@ -115,13 +115,9 @@ def top10_today(games, today):
         pick = g["home"] if g["win_home"] >= 0.5 else g["away"]
         hurt = [n for n in (g.get("notes") or []) if n.startswith(pick + ":") and re.search(r"\((Out|Doubtful)\)", n)]
         cands.append({**g, "pick": pick, "conf": p, "score": p - (INJ_PENALTY if hurt else 0), "injury_flag": bool(hurt)})
-    # best 10 across today and the next 2 days; reach further out only if that window has fewer than 10 games
-    end = (pd.Timestamp(today) + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
-    win = [c for c in cands if c["date"] <= end]
-    if len(win) < 10:
-        later = sorted([c for c in cands if c["date"] > end], key=lambda c: c["date"])
-        win += later[: 10 - len(win)]
-    return sorted(win, key=lambda c: (-c["score"], c["date"]))[:10]
+    # today's games only (Eastern time); fewer than 10 on light days
+    day = [c for c in cands if c["date"] == today]
+    return sorted(day, key=lambda c: -c["score"])[:10]
 
 
 def mark_backtest_top10(df):

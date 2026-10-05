@@ -79,7 +79,7 @@ scored against season-average lines, which are softer than real ones.
 
 ## Top 10 picks
 
-The 10 most confident winner picks across all sports over the next three days (Eastern time),
+The 10 most confident winner picks across all sports for today only (Eastern time; fewer on light days),
 moved down a little when the picked team has a key player Out or Doubtful. The list is saved in the
 picks log, so the Top 10 has its own live record, plus a backtested record (the daily top 10 by win chance).
 
