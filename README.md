@@ -1,4 +1,4 @@
-# skiiipicks: the makskiiiiipicks model for NFL, college football, NBA and MLB
+# skiiipicks: the skiii picks model for NFL, college football, NBA and MLB
 
 Opponent-adjusted team ratings, game projections, and an honest backtest for four sports.
 Everything downloads from free public data (nflverse, sportsdataverse, cfbfastR, baseballr).
