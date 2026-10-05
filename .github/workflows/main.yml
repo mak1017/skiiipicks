@@ -2,7 +2,6 @@ name: Rebuild skiiipicks
 
 on:
   schedule:
-    # 8 AM Eastern, then every hour from 10 AM to midnight Eastern (times are UTC; an hour earlier in winter)
     - cron: "0 0-4,12,14-23 * * *"
   workflow_dispatch:
 
