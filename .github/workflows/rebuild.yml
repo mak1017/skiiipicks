@@ -1,0 +1,60 @@
+name: Rebuild skiiipicks
+
+on:
+  schedule:
+    - cron: "0 0-4,12,14-23 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build skiiipicks
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          ODDS_HOURS: "12"
+        run: |
+          if [ ! -f requirements.txt ]; then cd "$(dirname "$(find . -name requirements.txt -not -path './.git/*' | head -1)")"; fi
+          if [ ! -f skiiipicks/core.py ]; then mkdir -p skiiipicks; f=$(find . -name core.py -not -path './.git/*' -not -path './skiiipicks/*' | head -1); [ -n "$f" ] && cp "$(dirname "$f")"/*.py "$(dirname "$f")"/dashboard_template.html skiiipicks/; fi
+          touch skiiipicks/__init__.py
+          pip install -r requirements.txt
+          python -m skiiipicks.build --out dashboard_data.json --log picks_log.csv --odds-cache odds_cache.json
+          mkdir -p "$GITHUB_WORKSPACE/site"
+          python -m skiiipicks.dashboard dashboard_data.json "$GITHUB_WORKSPACE/site/index.html"
+      - name: Save picks log
+        run: |
+          cd "$(dirname "$(find . -name requirements.txt -not -path './.git/*' | head -1)")"
+          git config user.name "skiiipicks-bot"
+          git config user.email "skiiipicks-bot@users.noreply.github.com"
+          git add picks_log.csv
+          [ -f odds_cache.json ] && git add odds_cache.json
+          git commit -m "Update picks log and odds" || echo "Nothing new"
+          git push
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
