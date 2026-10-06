@@ -305,6 +305,13 @@ function projFor(sp,h,a,neu){
 }
 const RLAB={green:"Green",yellow:"Yellow",red:"Red"};
 function rateOf(p){p=Math.max(p,1-p);return p>=.70?"green":p>=.58?"yellow":"red";}
+function am(x){ return x==null?"":(x>0?"+":"")+Math.round(x); }
+function valRate(e){ return e==null?null:(e>=0.05?"green":e>=0?"yellow":"red"); }
+function marketLine(g){
+  const m=g&&g.market; if(!m) return "";
+  const vr=valRate(m.ev), pick=(g.win_home>=0.5)?g.home:g.away;
+  return `<div class="pick-ats"><span class="dot r-${vr}"></span>Best price: <b>${esc(pick)} ${am(m.pick_price)}</b> at ${esc(m.pick_book)}. Market ${m.mkt_pick!=null?(m.mkt_pick*100).toFixed(0)+"%":"–"}, model ${(Math.max(g.win_home,1-g.win_home)*100).toFixed(0)}%. <b>${m.ev>=0?"+":""}${(m.ev*100).toFixed(1)}% EV</b>${m.ev_other>0.03?`. Value is on the other side: ${esc(pick===g.home?g.away:g.home)} ${am(pick===g.home?m.ml_best.away:m.ml_best.home)} (${(m.ev_other*100).toFixed(1)}% EV)`:""}</div>`;
+}
 function tierOf(p){p=Math.max(p,1-p);return p>=.75?"Strong":p>=.65?"Solid":p>=.57?"Lean":"Toss-up";}
 
 function fmt(v, kind){
@@ -352,7 +359,8 @@ function renderBoard(){
   $("sh").textContent = r.ph.toFixed(dec); $("sa").textContent = r.pa.toFixed(dec);
   $("th").textContent = S.home; $("ta").textContent = S.away;
   $("wph").style.width = (r.wp*100)+"%"; $("wpa").style.width = ((1-r.wp)*100)+"%";
-  $("wphl").textContent = `${S.home} ${(r.wp*100).toFixed(0)}%`; $("wpal").textContent = `${S.away} ${((1-r.wp)*100).toFixed(0)}%`;
+  const pc=x=>Math.max(1,Math.min(99,Math.round(x*100)));
+  $("wphl").textContent = `${S.home} ${pc(r.wp)}%`; $("wpal").textContent = `${S.away} ${pc(1-r.wp)}%`;
   const m = r.ph - r.pa, fav = m>=0?S.home:S.away;
   $("spr").textContent = Math.abs(m)<0.05 ? "Pick'em" : `${fav} -${Math.abs(m).toFixed(1)}`;
   $("tot").textContent = (r.ph+r.pa).toFixed(1);
@@ -364,7 +372,8 @@ function renderBoard(){
     const side = edge>=0?S.home:S.away;
     let txt = `Vegas: ${vf} -${Math.abs(g.line_home).toFixed(1)}`;
     if (g.total_line) txt += `, total ${g.total_line}`;
-    txt += Math.abs(edge) < 1 ? `. The model agrees with Vegas within a point.` : `. The model is ${Math.abs(edge).toFixed(1)} pts more bullish on ${side} than Vegas.`;
+    if (g.market) txt += `. Best moneyline: ${S.away} ${am(g.market.ml_best.away)} (${g.market.ml_best.away_book}), ${S.home} ${am(g.market.ml_best.home)} (${g.market.ml_best.home_book})`;
+    txt += Math.abs(edge) < 1 ? `. The model agrees with Vegas within a point.` : `. The model is ${Math.abs(edge).toFixed(1)} ${sp==="mlb"?"runs":"pts"} more bullish on ${side} than Vegas.`;
     $("vegas").innerHTML = `<div class="vegas">${esc(txt)}</div>`;
   } else $("vegas").innerHTML = "";
   $("asof").textContent = `Updated ${D.built_at?new Date(D.built_at).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):D.built}`;
@@ -462,7 +471,7 @@ function renderGames(){
 function renderPicks(){
   const sp=S.sport, d=D[sp], ups=(d.upcoming||[]).filter(g=>T(sp,g.home)&&T(sp,g.away));
   if (!ups.length){ $("pkS").textContent=""; $("picks").innerHTML=`<div class="empty">${sp==="nba"?"No NBA games in the next week. Use the scoreboard above for any matchup.":"No scheduled games in the data right now."}</div>`; return; }
-  $("pkS").innerHTML = `Sorted by how sure the model is about the winner. Spread leans come from a separate check of how the model's past disagreements with Vegas played out, so a lean can go against the projected winner.<span class="legend" style="margin-top:8px"><span><span class="dot r-green"></span>Green: 70%+ to win, or 56%+ to cover</span><span><span class="dot r-yellow"></span>Yellow: 58-70%, or 52.4-56% to cover</span><span><span class="dot r-red"></span>Red: coin flip, or below break-even</span></span>`;
+  $("pkS").innerHTML = `Sorted by how sure the model is about the winner. When odds are loaded, each pick also shows the best price across sportsbooks and its value (EV): green is +5% or better, yellow is 0 to +5%, red means the price is too short to be worth it. Spread leans come from a separate check of how the model's past disagreements with Vegas played out, so a lean can go against the projected winner.<span class="legend" style="margin-top:8px"><span><span class="dot r-green"></span>Green: 70%+ to win, or 56%+ to cover</span><span><span class="dot r-yellow"></span>Yellow: 58-70%, or 52.4-56% to cover</span><span><span class="dot r-red"></span>Red: coin flip, or below break-even</span></span>`;
   const rows = ups.map(g=>{const r=projFor(sp,g.home,g.away,!!g.neutral); return {g, r, conf:Math.max(r.wp,1-r.wp)};}).sort((a,b)=>b.conf-a.conf);
   $("picks").innerHTML = rows.slice(0,30).map(({g,r,conf},i)=>{
     const homeWin=r.wp>=0.5, pick=homeWin?g.home:g.away, opp=homeWin?g.away:g.home, rt=g.rating||rateOf(r.wp), dec=sp==="mlb"?1:0;
@@ -473,8 +482,9 @@ function renderPicks(){
       const sideLine=homeSide?-g.line_home:g.line_home, pc=homeSide?g.cover_home:1-g.cover_home;
       ats=`<div class="pick-ats"><span class="dot r-${g.ats_rating||"red"}"></span>Spread lean: <b>${esc(side)} ${sideLine>0?"+":""}${sideLine}</b>, ${(pc*100).toFixed(0)}% to cover</div>`;
     }
+    ats = marketLine(g) + ats;
     const notes=(g.notes||[]).length?`<ul class="pick-notes">${g.notes.map(n=>`<li>${esc(n)}</li>`).join("")}</ul>`:"";
-    return `<button class="pick-card" data-i="${i}"><div class="pick-top"><span class="pick-team">${esc(pick)} ${(conf*100).toFixed(0)}%</span><span class="rchip"><span class="dot r-${rt}"></span>${RLAB[rt]}</span></div>
+    return `<button class="pick-card" data-i="${i}"><div class="pick-top"><span class="pick-team">${esc(pick)} ${Math.min(99,Math.round(conf*100))}%</span><span class="rchip"><span class="dot r-${rt}"></span>${RLAB[rt]}</span></div>
       <div class="pick-meta">over ${esc(opp)}, projected ${sc}, ${esc(g.date)}${g.series&&g.series!=="Regular Season"?", "+esc(g.series):""}</div>${ats}${notes}</button>`;
   }).join("");
   $("picks").querySelectorAll(".pick-card").forEach(b=>b.onclick=()=>{const g=rows[+b.dataset.i].g;S.home=g.home;S.away=g.away;S.neutral=!!g.neutral;fillSelects();renderAll();window.scrollTo({top:0,behavior:"smooth"});});
@@ -483,22 +493,28 @@ function renderPicks(){
 let PT="game", PSIDE="away";
 const SQRT2=Math.SQRT2;
 function pOver(proj, sd, line){ return winp(proj-line, sd); }
+function countCdf(n, mu, phi){ // P(X <= n): Poisson when phi ~ 1, otherwise negative binomial
+  if (n<0) return 0; mu=Math.max(mu,1e-6); let pm, tot=0;
+  if (phi<=1.05){ pm=Math.exp(-mu); for(let k=0;k<=n;k++){tot+=pm; pm*=mu/(k+1);} return Math.min(tot,1); }
+  const r=mu/(phi-1), q=r/(r+mu); pm=Math.pow(q,r);
+  for(let k=0;k<=n;k++){tot+=pm; pm*=(k+r)/(k+1)*(1-q);} return Math.min(tot,1);
+}
 function defLine(x){ return Math.floor(x)+0.5; }
-function prow(label, sublabel, proj, sd, dec, kind){
+function prow(label, sublabel, proj, sd, dec, kind, tdword, phiArg){
   const id="p"+Math.random().toString(36).slice(2,8);
   if (kind==="td"){
     const p=1-Math.exp(-proj);
-    return `<div class="prow"><div class="pl"><b>${esc(label)}</b>${esc(sublabel)}</div><div></div><div class="po"><b>${(p*100).toFixed(0)}%</b><br>to score</div></div>`;
+    return `<div class="prow"><div class="pl"><b>${esc(label)}</b>${esc(sublabel)}</div><div></div><div class="po"><b>${(p*100).toFixed(0)}%</b><br>${tdword||"to score"}</div></div>`;
   }
   return `<div class="prow"><div class="pl"><b>${esc(label)}</b>${esc(sublabel)} ${proj.toFixed(dec)}</div>
-    <input inputmode="decimal" aria-label="${esc(label)} line" value="${defLine(proj)}" data-proj="${proj}" data-sd="${sd}" data-o="${id}">
+    <input inputmode="decimal" aria-label="${esc(label)} line" value="${defLine(proj)}" data-proj="${proj}" data-sd="${sd}" data-o="${id}" data-kind="${kind||"cont"}" data-phi="${phiArg||""}">
     <div class="po" id="${id}"></div></div>`;
 }
 function wireProps(){
   document.querySelectorAll("#props input[data-proj]").forEach(inp=>{
     const upd=()=>{const l=parseFloat(inp.value), o=$(inp.dataset.o);
       if (isNaN(l)){o.textContent="Enter a line";return;}
-      const p=pOver(+inp.dataset.proj, +inp.dataset.sd, l), q=Math.max(p,1-p);
+      const p=inp.dataset.kind==="count"?1-countCdf(Math.floor(l), +inp.dataset.proj, +inp.dataset.phi||1.2):pOver(+inp.dataset.proj, +inp.dataset.sd, l), q=Math.max(p,1-p);
       const rate=q>=0.58?"green":q>=0.524?"yellow":"red", side=p>=0.5?"over":"under";
       inp.closest(".prow").dataset.rate=rate;
       o.innerHTML=side==="over"?`<b>${(p*100).toFixed(0)}%</b> over<br>${((1-p)*100).toFixed(0)}% under`:`${(p*100).toFixed(0)}% over<br><b>${((1-p)*100).toFixed(0)}%</b> under`;};
@@ -514,7 +530,8 @@ function renderProps(){
   const sp=S.sport, d=D[sp], H=T(sp,S.home), A=T(sp,S.away), r=projFor(sp,S.home,S.away,S.neutral);
   const g=scheduled(sp,S.home,S.away), hasPlayers=g&&g.props&&((g.props.home||[]).length||(g.props.away||[]).length);
   const tabs=[["game","Game"],["team","Team"]];
-  if (sp==="nfl"||sp==="nba") tabs.push(["players","Players"],["injuries","Injuries"]);
+  tabs.push(["players","Players"]);
+  if (sp==="nfl"||sp==="nba") tabs.push(["injuries","Injuries"]);
   if (!tabs.find(t=>t[0]===PT)) PT="game";
   $("ptabs").innerHTML=tabs.map(([k,l])=>`<button class="ptab" aria-selected="${k===PT}" data-k="${k}">${l}</button>`).join("");
   $("ptabs").querySelectorAll(".ptab").forEach(b=>b.onclick=()=>{PT=b.dataset.k;renderProps();});
@@ -560,12 +577,15 @@ function renderProps(){
     if (!hasPlayers){
       h=`<div class="empty">${esc(d.props_note || (g ? "No player projections for this game yet." : "Player props are available for scheduled games. Pick one from Picks or Upcoming games."))}</div>`;
     } else {
+      if (sp==="mlb" && d.props_summary && d.props_summary.data_through) h+=`<p class="sub">Based on games through ${esc(d.props_summary.data_through)}, the latest the free play-by-play data goes. Lineups are the players who batted in each team's last game in that data, so confirm the real lineup before betting.</p>`;
+      if (sp==="cfb") h+=`<p class="sub">No free injury report for college football, so check that players are active before betting.</p>`;
       h+=`<div class="side-pick">${[S.away,S.home].map((t,i)=>`<button class="ptab" aria-selected="${(i?"home":"away")===PSIDE}" data-s="${i?"home":"away"}">${esc(t)}</button>`).join("")}</div>`;
       for (const pl of g.props[PSIDE]||[]){
         h+=`<div class="pgroup"><h3>${esc(pl.name)}${pl.status?`<span class="inj inj-${esc(pl.status.replace(/ /g,"-"))}">${esc(pl.status)}</span>`:""}</h3><p class="who">${esc(pl.role)}${pl.status?", check status before betting":""}</p>`;
         for (const [st,v] of Object.entries(pl.props)){
           const lab=(D[sp].prop_labels||{})[st]||st, sd=v.kind==="count"?Math.sqrt(Math.max(v.phi*v.proj,0.05)):v.sd;
-          h+=prow(lab, v.kind==="td"?"Projected TDs "+v.proj.toFixed(2):"Projected", v.proj, sd, v.kind==="cont"?1:1, v.kind);
+          const isHR=sp==="mlb";
+          h+=prow(lab, v.kind==="td"?(isHR?"Projected HRs ":"Projected TDs ")+v.proj.toFixed(2):"Projected", v.proj, sd, v.kind==="cont"?1:2, v.kind, isHR?"to homer":"to score", v.phi);
         }
         h+=`</div>`;
       }
@@ -601,22 +621,25 @@ function renderPL(){
   $("plS").textContent = PLSRC==="live"
     ? `Every pick is saved before the game and graded the morning after. Tracking started ${P.live_since||"today"}. 1 unit per pick.${odds?" Moneyline uses real odds; spreads use -110.":sp==="cfb"?" Spreads use -110; there are no free moneyline odds for college.":" There are no free odds for this sport, so it tracks win-loss only."}`
     : `What the model would have done this season, with each pick made using only games played before it. Kept separate from live picks.${sp==="nba"?" NBA shows the 2025-26 season.":""}`;
+  const os=D.odds_status||{};
+  const oddsNote = !os.has_key ? `<div class="empty" style="margin-bottom:10px">Odds aren't connected yet. Add your free Odds API key on GitHub (Settings, Secrets) to turn on best prices, value, real units for every sport, and closing line value.</div>`
+    : `<p class="sub">Odds last fetched ${Object.values(os.fetched_at||{}).filter(Boolean).sort().slice(-1).map(x=>new Date(x).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}))[0]||"not yet"}${os.remaining!=null?`, ${os.remaining} API credits left this month`:""}.${Object.keys(os.errors||{}).length?" Some sports failed to load: "+esc(Object.entries(os.errors).map(([k,v])=>k+" ("+v+")").join(", ")):""}</p>`;
   const blk=P[PLSRC], d=blk&&blk.by_sport&&blk.by_sport[sp];
   if (!d || !(d.all.picks)){
     const pend=d?d.all.pending:0;
-    $("pl").innerHTML=`<div class="empty">${PLSRC==="live"?`No graded ${D[sp].label} picks yet.${pend?` ${pend} picks are logged and waiting on results.`:""} Results show up after games finish and the next build runs.`:"No backtested picks for this sport."}</div>`;
+    $("pl").innerHTML=(PLSRC==="live"?oddsNote:"")+`<div class="empty">${PLSRC==="live"?`No graded ${D[sp].label} picks yet.${pend?` ${pend} picks are logged and waiting on results.`:""} Results show up after games finish and the next build runs.`:"No backtested picks for this sport."}</div>`;
     return;
   }
   const a=d.all, hasU=a.ml_units!=null||a.ats_units!=null, lines=sp==="nfl"||sp==="cfb";
-  let h = !lines ? `<div class="stats">
-    <div class="stat"><b>${rec(a)}</b><small>winner picks</small></div>
-    <div class="stat"><b>${pct(a)}</b><small>win rate</small></div>
+  let h = (PLSRC==="live"?oddsNote:"") + (!lines ? `<div class="stats">
+    <div class="stat"><b>${rec(a)}</b><small>winner picks, ${pct(a)}</small></div>
+    <div class="stat"><b class="${(a.ml_units||0)>=0?"pos":"neg"}">${a.ml_units!=null?u(a.ml_units):"–"}</b><small>moneyline${a.ml_units==null?" (no odds yet)":""}</small></div>
     <div class="stat"><b>${rec(d.by_rating.green)}</b><small>green picks, ${pct(d.by_rating.green)}</small></div>
     <div class="stat"><b>${a.pending||0}</b><small>waiting on results</small></div></div>` : `<div class="stats">
     <div class="stat"><b>${rec(a)}</b><small>winner picks, ${pct(a)}</small></div>
     <div class="stat"><b class="${(a.ml_units||0)>=0?"pos":"neg"}">${a.ml_units!=null?u(a.ml_units):"–"}</b><small>moneyline${a.ml_units==null?" (no odds)":""}</small></div>
     <div class="stat"><b>${atsRec(a)}</b><small>spread leans</small></div>
-    <div class="stat"><b class="${(a.ats_units||0)>=0?"pos":"neg"}">${a.ats_units!=null?u(a.ats_units):"–"}</b><small>spread units</small></div></div>`;
+    <div class="stat"><b class="${(a.ats_units||0)>=0?"pos":"neg"}">${a.ats_units!=null?u(a.ats_units):"–"}</b><small>spread units</small></div></div>`);
   h+=`<h3>By rating</h3><div class="scroll"><table><thead><tr><th>Rating</th><th>Record</th><th>Win%</th>${odds?"<th>ML</th>":""}${lines?"<th>Spread</th><th>Units</th>":""}</tr></thead><tbody>${
     ["green","yellow","red"].map(r=>{const t=d.by_rating[r], at=d.ats_by_rating[r];
       return `<tr><td><span class="dot r-${r}"></span>${RLAB[r]}</td><td>${rec(t)}</td><td>${pct(t)}</td>${odds?`<td class="${(t.ml_units||0)>=0?"pos":"neg"}">${u(t.ml_units)}</td>`:""}${lines?`<td>${atsRec(at)}</td><td class="${(at.ats_units||0)>=0?"pos":"neg"}">${u(at.ats_units)}</td>`:""}</tr>`;}).join("")}</tbody></table></div>
@@ -628,6 +651,14 @@ function renderPL(){
       const ats=x.ats_result?` <span class="mu">Spread: ${esc(x.ats_side)} ${x.ats_line>0?"+":""}${x.ats_line}</span> <span class="res res-${x.ats_result}">${x.ats_result}</span>`:"";
       return `<div class="rec"><span class="dot r-${x.rating}"></span><span><b>${esc(x.pick)}</b> <span class="mu">${(x.win_prob*100).toFixed(0)}%, ${esc(x.date)}</span><br><span class="mu">${esc(sc)}</span>${ats}</span><span class="res res-${x.ml_result}">${x.ml_result}</span></div>`;}).join("")}</div>`;
   }
+  if (a.clv_n){
+    h+=`<h3>Closing line value</h3><div class="stats">
+      <div class="stat"><b>${(a.clv_beat*100).toFixed(0)}%</b><small>of ${a.clv_n} picks beat the closing price</small></div>
+      <div class="stat"><b class="${a.clv_avg>=0?"pos":"neg"}">${a.clv_avg>=0?"+":""}${(a.clv_avg*100).toFixed(1)}</b><small>avg points of win chance gained</small></div></div>
+      <p class="sub" style="margin-top:6px">If the price on a pick shortens before the game, the market moved toward the model. Doing that consistently is the best early sign of a real edge, long before win-loss records settle.</p>`;
+  }
+  const vb=blk.value&&blk.value.all;
+  if (vb && vb.picks) h+=`<p class="sub">Value bets (positive EV when logged), all sports: ${rec(vb)} (${pct(vb)})${vb.ml_units!=null?`, ${u(vb.ml_units)}`:""}.</p>`;
   const all=blk.all;
   h+=`<p class="sub" style="margin-top:10px">All sports, ${PLSRC==="live"?"live":"backtested"}: ${rec(all)} winners (${pct(all)})${all.ats_units!=null?`, spreads ${atsRec(all)} (${u(all.ats_units)})`:""}${all.ml_units!=null?`, moneyline ${u(all.ml_units)}`:""}.</p>`;
   $("pl").innerHTML=h;
@@ -649,8 +680,8 @@ function renderTop10(){
   }
   if (L.length) $("t10").innerHTML=L.map((t,i)=>{const opp=t.pick===t.home?t.away:t.home, rt=rateOf(t.conf);
     return `<li><button data-i="${i}"><span class="n">${t.rank}</span>
-      <span class="pk"><span class="dot r-${rt}"></span>${esc(t.pick)}</span><span class="pc">${(t.conf*100).toFixed(0)}%</span>
-      <span class="mt">over ${esc(opp)}, ${esc(D[t.sport].label)}${t.injury_flag?'. <span class="warn">Key player out</span>':""}</span></button></li>`;}).join("");
+      <span class="pk"><span class="dot r-${rt}"></span>${esc(t.pick)}</span><span class="pc">${Math.min(99,Math.round(t.conf*100))}%</span>
+      <span class="mt">over ${esc(opp)}, ${esc(D[t.sport].label)}${t.price!=null?`. ${am(t.price)} at ${esc(t.book)}, <span style="color:${t.ev>=0.05?"#16a34a":t.ev>=0?"#ca8a04":"#dc2626"};font-weight:600">${t.ev>=0?"+":""}${(t.ev*100).toFixed(1)}% EV</span>`:""}${t.injury_flag?'. <span class="warn">Key player out</span>':""}</span></button></li>`;}).join("");
   $("t10").querySelectorAll("button").forEach(b=>b.onclick=()=>{const t=L[+b.dataset.i];
     S.sport=t.sport; renderTabs(); S.home=t.home; S.away=t.away; S.neutral=false;
     const g=(D[t.sport].upcoming||[]).find(x=>x.home===t.home&&x.away===t.away); if(g) S.neutral=!!g.neutral;
@@ -721,8 +752,8 @@ function renderBT(){
   }
   const ps=D[sp].props_summary;
   if (ps && ps.rows && ps.rows.length){
-    parts.push(`<h3>Player props, tested on ${sp==="nba"?(ps.season-1)+"-"+String(ps.season).slice(2):ps.season}</h3><p class="sub" style="margin-bottom:8px">Projections made before each game. "Lean" is how often the model's side won when it was 60%+ on one side of a line set at the player's season average. Sportsbook lines are sharper than that, so expect less in real betting.</p><div class="scroll"><table><thead><tr><th>Prop</th><th>Miss</th><th>Season avg miss</th><th>Lean won</th><th>Leans</th></tr></thead><tbody>${
-      ps.rows.map(r=>`<tr><td>${esc(r.stat)}</td><td>${r.mae.toFixed(1)}</td><td>${r.naive_mae.toFixed(1)}</td><td>${r.lean_hit!=null?(r.lean_hit*100).toFixed(0)+"%":(r.td_pred!=null?"TD: said "+(r.td_pred*100).toFixed(0)+"%, was "+(r.td_actual*100).toFixed(0)+"%":"–")}</td><td>${r.lean_n||"–"}</td></tr>`).join("")}</tbody></table></div>`);
+    parts.push(`<h3>Player props, tested on ${sp==="nba"?(ps.season-1)+"-"+String(ps.season).slice(2):ps.season}${sp==="mlb"?" (batters)":""}</h3><p class="sub" style="margin-bottom:8px">Projections made before each game. "Lean" is how often the model's side won when it was 60%+ on one side of a line set at the player's season average. Sportsbook lines are sharper than that, so expect less in real betting.</p><div class="scroll"><table><thead><tr><th>Prop</th><th>Miss</th><th>Season avg miss</th><th>Lean won</th><th>Leans</th></tr></thead><tbody>${
+      ps.rows.map(r=>`<tr><td>${esc(r.stat)}</td><td>${r.mae.toFixed(1)}</td><td>${r.naive_mae.toFixed(1)}</td><td>${r.lean_hit!=null?(r.lean_hit*100).toFixed(0)+"%":(r.td_pred!=null?"Said "+(r.td_pred*100).toFixed(0)+"%, was "+(r.td_actual*100).toFixed(0)+"%":"–")}</td><td>${r.lean_n||"–"}</td></tr>`).join("")}</tbody></table></div>`);
   }
   if (!ss || !ss.length){
     if (b.prior) parts.push(block(b.prior, `${b.prior.season} season`));

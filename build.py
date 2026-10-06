@@ -12,7 +12,7 @@ from datetime import date
 
 import pandas as pd
 
-from . import nfl, cfb, nba, mlb, stack, props, pnl, injuries
+from . import nfl, cfb, nba, mlb, stack, props, pnl, injuries, odds
 from .core import win_prob
 from .core import fit_ratings, rank_dict
 
@@ -180,6 +180,48 @@ def nba_key_players(src, season):
     return keys
 
 
+def add_cfb_props(src, cpbp, nmap, ups, season):
+    """College player props. Spreads and the reported test come from last season's games."""
+    kinds = {k: v[1] for k, v in props.NFL_STATS.items()}
+    role_stats = lambda r, g: props.ROLE_STATS.get(props.nfl_role(r), []) if props.nfl_role(r) else []
+    summary, spreads = None, {}
+    try:
+        prev_games = cfb.load_games({season - 1: src("cfb_sched", season - 1)}, {})
+        ppb = cfb.prep_pbp(pd.read_parquet(src("cfb_pbp", season - 1)))
+        prev = props.cfb_player_games(ppb, cfb.name_map(ppb, prev_games), season - 1)
+        cuts = sorted(pd.Timestamp(c) for c in prev["date"].unique())[3:] + [prev["date"].max() + pd.Timedelta(days=7)]
+        bt = props.backtest(prev, props.nfl_project, kinds, season - 1, cuts, role_stats)
+        spreads = props.fit_spreads(bt, kinds)
+        summary = {"rows": props.summarize(bt, kinds, spreads, props.NFL_LABELS), "season": season - 1}
+    except Exception as e:
+        print("CFB props backtest skipped:", repr(e)[:200])
+        prev = None
+    cur = props.cfb_player_games(cpbp, nmap, season)
+    pg = pd.concat([prev, cur], ignore_index=True) if prev is not None else cur
+    form, opp = props.nfl_project(pg, pd.Timestamp.today() + pd.Timedelta(days=1), season)
+    _attach(ups, lambda t, o: props.nfl_game_props(form, opp, t, o, spreads))
+    return summary
+
+
+def add_mlb_props(src, mpbp, mg, ups, season):
+    """MLB batter props, named through the Chadwick Bureau register."""
+    try:
+        names = props.mlb_names(src("mlb_people"))
+    except Exception as e:
+        print("MLB names unavailable:", repr(e)[:200])
+        return None
+    pg = props.mlb_player_games(mpbp, mg, names)
+    last = pg["date"].max()
+    cuts = list(pd.date_range(pg["date"].min() + pd.Timedelta(days=45), last + pd.Timedelta(days=1), freq="7D"))
+    bt = props.backtest(pg, props.mlb_project, props.MLB_STATS, season, cuts,
+                        lambda r, g: list(props.MLB_STATS) if r["pa"] >= 3 else [])
+    spreads = props.fit_spreads(bt, props.MLB_STATS)
+    form, opp = props.mlb_project(pg, pd.Timestamp.today() + pd.Timedelta(days=1), season)
+    _attach(ups, lambda t, o: props.mlb_game_props(form, opp, t, o, spreads))
+    return {"rows": props.summarize(bt, props.MLB_STATS, spreads, props.MLB_LABELS), "season": season,
+            "data_through": last.strftime("%Y-%m-%d")}
+
+
 def nba_upcoming(src, model, season):
     """Use next season's schedule once it's published (ratings carry over at full strength, best in testing)."""
     for path in (src("nba_sched", season + 1), src("nba_sched", season)):
@@ -192,10 +234,12 @@ def nba_upcoming(src, model, season):
     return []
 
 
-def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026, log_path=None):
+def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026, log_path=None,
+        odds_path=None, odds_key=None, odds_fetcher=None):
     out = {"built": date.today().isoformat(),
            "built_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     LIVE, BACK, RES = [], [], []
+    NAMES = {}  # per sport: how to recognise team names in the odds feed
 
     # ---------------- NFL ----------------
     for season_nfl in (season_nfl, season_nfl - 1):
@@ -239,6 +283,7 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
             RES.append(result_rows("nfl", games))
             nfl_props_summary = add_nfl_props(pbp_all, up_recs, season_nfl)
             ninj, ninfo = injuries.get("nfl", src("nfl_inj", season_nfl), injuries.NFL_TEAMS)
+            NAMES["nfl"] = {v: k for k, v in injuries.NFL_TEAMS.items()}
             injuries.attach(up_recs, ninj, "nfl", {})
             out["nfl"] = {"label": "NFL", "season": season_nfl, "unit": "pts", "teams": teams,
                           "model": {**ratings_block(model.pts), "eff_off": model.eff.off, "eff_dfn": model.eff.dfn,
@@ -284,19 +329,23 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
             add_ranks(cteams, {"off_rating": True, "def_rating": True, "net_rating": True, "adj_off_sr": True,
                                "adj_def_sr": True, "off_ppd": True, "def_ppd": False})
             fbs = {t["team"] for t in cteams}
+            NAMES["cfb"] = sorted(set(cg.loc[cg["season"] == season_cfb, "home"]) | set(cg.loc[cg["season"] == season_cfb, "away"]))
             cup = pd.DataFrame(cfb.upcoming(cg, cmodel.pts))
             if not cup.empty:
                 gid = cg[cg["home_pts"].isna() & (cg["season"] == season_cfb)][["game_id", "home", "away", "week"]]
                 cup = cup.merge(gid, on=["home", "away", "week"], how="left").merge(cfeats, on="game_id", how="left")
                 cup["pm"] = cup["pred_home"] - cup["pred_away"]
                 cup = finish_upcoming(cup, cst, cfb_notes)
-            for u in (cup.to_dict("records") if not cup.empty else []):
+            cup_recs = cup.to_dict("records") if not cup.empty else []
+            cfb_props_summary = add_cfb_props(src, cpbp, nmap, cup_recs, season_cfb)
+            for u in cup_recs:
                 LIVE.append(pnl.make_row("live", "cfb", u["date"], u["home"], u["away"], u["win_home"],
                                          u.get("line_home"), u.get("cover_home")))
             out["cfb"] = {"label": "College football", "season": season_cfb, "unit": "pts", "teams": cteams,
                           "model": {k: ({t: v for t, v in d.items() if t in fbs} if isinstance(d, dict) else d)
                                     for k, d in ratings_block(cmodel.pts).items()},
-                          "sigma": cst.sigma, "upcoming": cup.to_dict("records") if not cup.empty else [],
+                          "sigma": cst.sigma, "upcoming": cup_recs, "props_summary": cfb_props_summary,
+                          "prop_labels": props.NFL_LABELS,
                           "stack": cst.coefs(), "total_sd": total_sd(cbase[season_cfb - 1]),
                           "seasons": cseasons + [stack.pooled(cseasons)],
                           "backtest": {"prior": {"season": season_cfb - 1, **cbase[season_cfb - 1]},
@@ -328,6 +377,7 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
             nba_props_summary, nba_props_note = add_nba_props(src, nba_ups, season_nba)
             LIVE += [pnl.make_row("live", "nba", u["date"], u["home"], u["away"], u["win_home"]) for u in nba_ups]
             nba_map = {r.team_display_name: r.team for r in box.drop_duplicates("team").itertuples()}
+            NAMES["nba"] = {v: k for k, v in nba_map.items()}
             binj, binfo = injuries.get("nba", src("nba_inj", season_nba + 1), nba_map)
             injuries.attach(nba_ups, binj, "nba", nba_key_players(src, season_nba))
             out["nba"] = {"label": "NBA", "season": season_nba, "unit": "pts", "teams": nteams,
@@ -353,10 +403,13 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
             mmodel = mlb.make_fit(mg, season_mlb)(pd.Timestamp.today() + pd.Timedelta(days=1))
             mups = mlb.upcoming(mg, mmodel)
             LIVE += [pnl.make_row("live", "mlb", u["date"], u["home"], u["away"], u["win_home"]) for u in mups]
-            prof = mlb.inning_profile(pd.read_parquet(src("mlb_pbp", season_mlb)), mg)
+            mpbp = pd.read_parquet(src("mlb_pbp", season_mlb))
+            NAMES["mlb"] = {v: k for k, v in mlb.TEAM_ABBR.items()}
+            prof = mlb.inning_profile(mpbp, mg)
             mteams = mlb.team_profiles(mg, mmodel, prof, season_mlb)
             add_ranks(mteams, {"off_rating": True, "def_rating": True, "net_rating": True})
             out["mlb"] = {"label": "MLB", "season": season_mlb, "unit": "runs", "teams": mteams,
+                          "props_summary": add_mlb_props(src, mpbp, mg, mups, season_mlb), "prop_labels": props.MLB_LABELS,
                           "model": ratings_block(mmodel), "sigma": mlb.SIGMA, "total_sd": total_sd(msumm), "upcoming": mups,
                           "backtest": {"current": {"season": season_mlb, **msumm}}}
             break
@@ -365,13 +418,34 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
             out.pop("mlb", None)
 
     results = pd.concat(RES, ignore_index=True) if RES else pd.DataFrame(columns=["sport", "date", "home", "away", "home_pts", "away_pts"])
+    # ---- sportsbook odds (cached; fetched on a credit budget) ----
+    soon = (pd.Timestamp.today() + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+    need = [sp for sp in ("nfl", "cfb", "nba", "mlb")
+            if any(u["date"] <= soon for u in (out.get(sp) or {}).get("upcoming", [])) and sp in NAMES]
+    cache, ostatus = odds.update_cache(odds_path, odds_key, need, **({"fetcher": odds_fetcher} if odds_fetcher else {}))
+    ostatus["matched"] = {}
+    for sp in ("nfl", "cfb", "nba", "mlb"):
+        if sp in NAMES and out.get(sp):
+            ostatus["matched"][sp] = odds.attach(out[sp]["upcoming"], sp, cache, odds.make_matcher(sp, NAMES[sp]))
+    out["odds_status"] = ostatus
+    mk = {(sp, u["date"], u["home"], u["away"]): u.get("market") for sp in ("nfl", "cfb", "nba", "mlb")
+          for u in (out.get(sp) or {}).get("upcoming", [])}
+    for r in LIVE:
+        m = mk.get((r["sport"], r["date"], r["home"], r["away"]))
+        if m:
+            r["ml_odds"], r["book"] = m["pick_price"], m["pick_book"]
+            r["ml_home"], r["ml_away"] = m["ml_best"]["home"], m["ml_best"]["away"]
+            r["mkt_prob"], r["ev"] = m.get("mkt_pick"), m.get("ev")
+
     # Top 10 for today (Eastern time), across sports
     from zoneinfo import ZoneInfo
     today_et = __import__("datetime").datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     allg = [{**u, "sport": sp} for sp in ("nfl", "cfb", "nba", "mlb") for u in (out.get(sp) or {}).get("upcoming", [])]
     top = pnl.top10_today(allg, today_et)
     out["top10"] = [{"rank": i + 1, "sport": t["sport"], "date": t["date"], "home": t["home"], "away": t["away"],
-                     "pick": t["pick"], "conf": t["conf"], "injury_flag": t["injury_flag"]} for i, t in enumerate(top)]
+                     "pick": t["pick"], "conf": t["conf"], "injury_flag": t["injury_flag"],
+                     "ev": (t.get("market") or {}).get("ev"), "price": (t.get("market") or {}).get("pick_price"),
+                     "book": (t.get("market") or {}).get("pick_book")} for i, t in enumerate(top)]
     out["today"] = today_et
     nxt = sorted({g["date"] for g in allg if g["date"] > today_et})
     out["next_game_day"] = nxt[0] if nxt else None
@@ -414,6 +488,8 @@ def sources(data_dir=None):
     }
 
     def src(key, season=None):
+        if key == "mlb_people":
+            return os.path.join(data_dir, "reg", "people-{}.csv") if data_dir else props.REGISTER_URL
         if key == "nfl_pbp":
             return os.path.join(data_dir, local[key]) if data_dir else remote[key]
         if data_dir:
@@ -429,8 +505,10 @@ if __name__ == "__main__":
     ap.add_argument("--data-dir", default=None)
     ap.add_argument("--out", default="dashboard_data.json")
     ap.add_argument("--log", default="picks_log.csv", help="live picks ledger (kept between runs)")
+    ap.add_argument("--odds-cache", default="odds_cache.json", help="cached sportsbook odds (kept between runs)")
     a = ap.parse_args()
-    data = run(sources(a.data_dir), **current_seasons(), log_path=a.log)
+    data = run(sources(a.data_dir), **current_seasons(), log_path=a.log, odds_path=a.odds_cache,
+               odds_key=os.environ.get("ODDS_API_KEY"))
     with open(a.out, "w") as f:
         json.dump(data, f, separators=(",", ":"))
     print("wrote", a.out, os.path.getsize(a.out) // 1024, "KB")

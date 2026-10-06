@@ -61,6 +61,13 @@ matchups and sanity-check lines, not as a betting system.
   quarter-by-quarter scoring), team totals; MLB 1st-inning run and first-5-innings totals.
 - **NFL player props:** passing yards/TDs, rushing yards, receptions, receiving yards, anytime TD.
 - **NBA player props:** points, rebounds, assists, threes, PRA (switch on once the season's games are in the data).
+- **College football player props:** same stats as NFL, from cfbfastR play-by-play names (QB, top 2 RBs, top 4 receivers).
+- **MLB batter props:** hits, total bases, home run, strikeouts, RBIs for each team's 9 most-used recent batters,
+  named via the Chadwick Bureau register. Uses the latest MLB play-by-play available (it lags a few weeks).
+  No pitcher props: probable starters aren't in the free data.
+
+Count stats (receptions, TDs thrown, rebounds, hits, total bases...) use Poisson / negative binomial
+distributions fitted from the backtest; yardage and points use a normal distribution.
 
 Projection = recent weighted form x how much the opponent allows of that stat. The over/under spread
 for each stat is fitted from a walk-forward backtest on last season. Type a sportsbook line into the
@@ -92,6 +99,17 @@ averaging 20+ minutes) are called out on the pick. Injuries do not change projec
 
 The GitHub workflow runs at 8 AM Eastern and then hourly from 10 AM to midnight Eastern so reports
 stay fresh into game time. Final inactives (NFL: 90 minutes before kickoff) can still land between runs.
+
+## Sportsbook odds (`odds.py`)
+
+Uses The Odds API (free key at the-odds-api.com; 500 credits/month). Add it on GitHub under
+Settings > Secrets and variables > Actions > New repository secret, named `ODDS_API_KEY`.
+Odds are fetched once a day (8 AM Eastern, `ODDS_HOURS: "12"` in UTC) for sports with games in the
+next 3 days, about 3 credits per sport, and cached in `odds_cache.json` for the hourly runs.
+
+Adds: best moneyline price and book per pick, the market's no-vig win chance, EV of the pick at the best
+price, spreads/totals for NBA and MLB, real moneyline units for every sport, and closing line value
+(first logged price vs. the last price before the game). Player prop lines need a paid plan.
 
 ## Ideas to improve it
 

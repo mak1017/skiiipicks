@@ -18,7 +18,8 @@ GREEN, YELLOW = 0.70, 0.58          # winner pick: chance the picked team wins
 ATS_GREEN, ATS_YELLOW = 0.56, 0.524  # spread lean: chance to cover (52.4% = break-even at -110)
 COLS = ["source", "sport", "date", "home", "away", "pick", "win_prob", "rating", "ml_odds",
         "ats_side", "ats_line", "cover_prob", "ats_rating", "logged", "home_pts", "away_pts",
-        "ml_result", "ml_units", "ats_result", "ats_units", "top10"]
+        "ml_result", "ml_units", "ats_result", "ats_units", "top10",
+        "ml_home", "ml_away", "open_ml_home", "open_ml_away", "mkt_prob", "ev", "book", "clv"]
 INJ_PENALTY = 0.04  # ranking only: a pick whose own key player is Out/Doubtful drops in the Top 10
 
 
@@ -74,6 +75,15 @@ def grade(df, results):
     has = done & df["ats_side"].notna()
     df["ats_result"] = np.where(~has, None, np.where(cov > 0, "W", np.where(cov < 0, "L", "P")))
     df["ats_units"] = np.where(~has, np.nan, np.where(cov > 0, 100 / 110, np.where(cov < 0, -1.0, 0.0)))
+    # closing line value: did the price on our side shorten between the first and last odds we logged?
+    if "open_ml_home" in df.columns:
+        def imp(a):
+            a = pd.to_numeric(a, errors="coerce")
+            return np.where(a > 0, 100 / (a + 100), -a / (-a + 100))
+        ph = df["pick"] == df["home"]
+        o = np.where(ph, imp(df["open_ml_home"]), imp(df["open_ml_away"]))
+        c = np.where(ph, imp(df["ml_home"]), imp(df["ml_away"]))
+        df["clv"] = np.where(done, c - o, np.nan)
     return df
 
 
@@ -82,6 +92,11 @@ def update_log(path, live_rows, results, today=None):
     old = pd.read_csv(path, dtype={"date": str}) if path and os.path.exists(path) else pd.DataFrame(columns=COLS)
     new = pd.DataFrame(live_rows, columns=COLS) if live_rows else pd.DataFrame(columns=COLS)
     key = ["sport", "date", "home", "away"]
+    opens = {}
+    if not old.empty and "open_ml_home" in old.columns:
+        for r in old.itertuples():
+            if pd.notna(getattr(r, "open_ml_home", None)):
+                opens[(r.sport, r.date, r.home, r.away)] = (r.open_ml_home, r.open_ml_away)
     if not old.empty:
         # freeze anything already played or dated before today; refresh the rest with today's picks
         frozen = old[(old["date"] < today) | old["home_pts"].notna()]
@@ -96,6 +111,13 @@ def update_log(path, live_rows, results, today=None):
     for c in COLS:
         if c not in log.columns:
             log[c] = None
+    # opening price = first price ever logged for the game; later builds only update the latest price
+    oh, oa = [], []
+    for r in log.itertuples():
+        o = opens.get((r.sport, r.date, r.home, r.away))
+        oh.append(o[0] if o else r.ml_home)
+        oa.append(o[1] if o else r.ml_away)
+    log["open_ml_home"], log["open_ml_away"] = oh, oa
     log = log.drop_duplicates(key, keep="last")
     log = grade(log, results)
     log = log.sort_values(["date", "sport", "home"]).reset_index(drop=True)
@@ -134,13 +156,22 @@ def _tally(d):
     g = d[d["ml_result"].isin(["W", "L", "P"])]
     a = d[d["ats_result"].isin(["W", "L", "P"])]
     ml_u = g["ml_units"].dropna()
-    return {
+    out = {
         "picks": int(len(g)), "w": int((g["ml_result"] == "W").sum()), "l": int((g["ml_result"] == "L").sum()),
         "ml_units": float(ml_u.sum()) if len(ml_u) else None, "ml_bets": int(len(ml_u)),
         "ats_w": int((a["ats_result"] == "W").sum()), "ats_l": int((a["ats_result"] == "L").sum()),
         "ats_p": int((a["ats_result"] == "P").sum()), "ats_units": float(a["ats_units"].sum()) if len(a) else None,
         "pending": int((d["ml_result"].isna()).sum()),
     }
+    if "clv" in d.columns:
+        cv = pd.to_numeric(g["clv"], errors="coerce").dropna()
+        cv = cv[pd.to_numeric(g.loc[cv.index, "open_ml_home"], errors="coerce").notna()]
+        out["clv_n"] = int(len(cv))
+        if len(cv):
+            out["clv_avg"] = float(cv.mean())
+            out["clv_beat"] = float((cv > 0).mean())
+            out["clv_same"] = float((cv == 0).mean())
+    return out
 
 
 def summarize(df):
@@ -157,6 +188,8 @@ def summarize(df):
                                    "ats_by_rating": {r: _tally(d[d["ats_rating"] == r]) for r in ("green", "yellow", "red")},
                                    "curve": _curve(d), "recent": _recent(d)}
         blk["by_rating"] = {r: _tally(s[s["rating"] == r]) for r in ("green", "yellow", "red")}
+        evs = pd.to_numeric(s["ev"], errors="coerce") if "ev" in s else pd.Series(dtype=float)
+        blk["value"] = {"all": _tally(s[evs > 0]), "green": _tally(s[evs >= 0.05])}
         t10 = s[s["top10"].notna()] if "top10" in s else s.iloc[0:0]
         blk["top10"] = {"all": _tally(t10), "curve": _curve(t10)}
         blk["curve"] = _curve(s)

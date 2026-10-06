@@ -205,11 +205,31 @@ def _norm_cdf(x):
     return 0.5 * (1 + erf(x / sqrt(2)))
 
 
+def count_cdf(n, mu, phi):
+    """P(X <= n) for a count with mean mu and variance phi*mu: Poisson if phi ~ 1, else negative binomial."""
+    if n < 0:
+        return 0.0
+    mu = max(mu, 1e-6)
+    if phi <= 1.05:
+        pm, tot = np.exp(-mu), 0.0
+        for k in range(int(n) + 1):
+            tot += pm
+            pm *= mu / (k + 1)
+        return min(tot, 1.0)
+    r = mu / (phi - 1)
+    q = r / (r + mu)
+    pm, tot = q ** r, 0.0
+    for k in range(int(n) + 1):
+        tot += pm
+        pm *= (k + r) / (k + 1) * (1 - q)
+    return min(tot, 1.0)
+
+
 def p_over(proj, kind, line, sd=None, phi=None):
     if kind == "td":
         return 1 - np.exp(-proj) if line < 1 else None
     if kind == "count":
-        sd = np.sqrt(max(phi * proj, 0.05))
+        return 1 - count_cdf(np.floor(line), proj, phi or 1.2)
     return 1 - _norm_cdf((line - proj) / sd)
 
 
@@ -229,7 +249,12 @@ def backtest(pg, project_fn, kinds, cur_season, cuts, row_filter):
             for st in row_filter(r, g):
                 cat = NFL_STATS[st][0] if st in NFL_STATS else st
                 fac = float(opp[cat].get(g["opp"], 1.0)) if cat in opp else 1.0
-                base = r[st] if st in r else r[st + "_pm"] * r["minutes"]
+                if st in r:
+                    base = r[st]
+                elif st + "_pp" in r:
+                    base = r[st + "_pp"] * r["pa"]
+                else:
+                    base = r[st + "_pm"] * r["minutes"]
                 rows.append({"stat": st, "proj": float(base) * fac, "naive": float(naive.loc[g["pid"], st]),
                              "actual": float(g[st])})
     return pd.DataFrame(rows)
@@ -262,4 +287,96 @@ def summarize(bt, kinds, spreads, labels):
             r["td_pred"] = float(p.mean())
             r["td_actual"] = float(hit.mean())
         out.append(r)
+    return out
+
+
+# ---------------- college football (same roles and stats as NFL) ----------------
+
+def cfb_player_games(pbp, nmap, season):
+    """cfbfastR play-by-play -> one row per player-game, with schedule team names."""
+    p = pbp.copy()
+    p["team"], p["opp"] = p["pos_team"].map(nmap), p["def_pos_team"].map(nmap)
+    p = p[p["team"].notna() & p["opp"].notna()]
+    p["date"] = pd.Timestamp(f"{season}-08-29") + pd.to_timedelta((p["week"] - 1) * 7, unit="D")
+    base = ["game_id", "week", "date", "team", "opp"]
+    passes = p[(p["pass"] == 1) & p["passer_player_name"].notna() & p["yds_sacked"].isna()]
+    comp = passes["completion"].fillna(False).astype(bool)
+    ps = passes.assign(c=comp, y=np.where(comp, passes["yds_receiving"].fillna(0), 0), td=passes["pass_td"].fillna(0)).groupby(
+        base + ["passer_player_name"]).agg(pass_att=("c", "size"), pass_yds=("y", "sum"), pass_td=("td", "sum")).reset_index().rename(
+        columns={"passer_player_name": "name"})
+    rush = p[(p["rush"] == 1) & p["rusher_player_name"].notna()]
+    ru = rush.assign(y=rush["yds_rushed"].fillna(0), td=rush["rush_td"].fillna(0)).groupby(base + ["rusher_player_name"]).agg(
+        rush_att=("y", "size"), rush_yds=("y", "sum"), rush_td=("td", "sum")).reset_index().rename(columns={"rusher_player_name": "name"})
+    tg = passes[passes["receiver_player_name"].notna()]
+    tc = tg["completion"].fillna(False).astype(bool)
+    rc = tg.assign(c=tc.astype(int), y=np.where(tc, tg["yds_receiving"].fillna(0), 0), td=tg["pass_td"].fillna(0)).groupby(
+        base + ["receiver_player_name"]).agg(targets=("c", "size"), receptions=("c", "sum"), rec_yds=("y", "sum"),
+                                             rec_td=("td", "sum")).reset_index().rename(columns={"receiver_player_name": "name"})
+    pg = ps.merge(ru, on=base + ["name"], how="outer").merge(rc, on=base + ["name"], how="outer")
+    num = ["pass_att", "pass_yds", "pass_td", "rush_att", "rush_yds", "rush_td", "targets", "receptions", "rec_yds", "rec_td"]
+    pg[num] = pg[num].fillna(0)
+    pg["any_td"] = pg["rush_td"] + pg["rec_td"]
+    pg["season"] = season
+    pg["pid"] = pg["team"] + "|" + pg["name"]
+    return pg
+
+
+# ---------------- MLB batters ----------------
+
+MLB_STATS = {"hits": "count", "total_bases": "count", "home_runs": "td", "strikeouts": "count", "rbi": "count"}
+MLB_LABELS = {"hits": "Hits", "total_bases": "Total bases", "home_runs": "Home run", "strikeouts": "Strikeouts (batter)",
+              "rbi": "RBIs"}
+PA_EVENTS = {"single", "double", "triple", "home_run", "walk", "intent_walk", "hit_by_pitch", "strikeout",
+             "strikeout_double_play", "field_out", "force_out", "grounded_into_double_play", "double_play", "triple_play",
+             "fielders_choice", "fielders_choice_out", "field_error", "sac_fly", "sac_bunt", "sac_fly_double_play",
+             "sac_bunt_double_play", "catcher_interf", "other_out"}
+REGISTER_URL = "https://raw.githubusercontent.com/chadwickbureau/register/master/data/people-{}.csv"
+
+
+def mlb_names(path_fmt=REGISTER_URL):
+    fr = [pd.read_csv(path_fmt.format(h), usecols=["key_mlbam", "name_first", "name_last"], low_memory=False)
+          for h in "0123456789abcdef"]
+    r = pd.concat(fr).dropna(subset=["key_mlbam"])
+    return dict(zip(r["key_mlbam"].astype(int), (r["name_first"].fillna("") + " " + r["name_last"].fillna("")).str.strip()))
+
+
+def mlb_player_games(pbp, games, names):
+    p = pbp[pbp["event_type"].isin(PA_EVENTS)].merge(games[["game_pk", "home", "away", "date", "season"]], on="game_pk")
+    top = p["half_inning"] == "top"
+    p["team"], p["opp"] = np.where(top, p["away"], p["home"]), np.where(top, p["home"], p["away"])
+    ev = p["event_type"]
+    tb = ev.map({"single": 1, "double": 2, "triple": 3, "home_run": 4}).fillna(0)
+    p = p.assign(pa=1, hits=(tb > 0).astype(int), total_bases=tb, home_runs=(ev == "home_run").astype(int),
+                 strikeouts=ev.str.startswith("strikeout").astype(int), rbi=p["rbi"].fillna(0))
+    pg = p.groupby(["game_pk", "batter_id", "team", "opp", "date", "season"])[
+        ["pa", "hits", "total_bases", "home_runs", "strikeouts", "rbi"]].sum().reset_index()
+    pg = pg.rename(columns={"batter_id": "pid", "game_pk": "game_id"})
+    pg["name"] = pg["pid"].map(names).fillna("Player " + pg["pid"].astype(str))
+    return pg
+
+
+def mlb_project(pg, as_of, cur_season):
+    hist = pg[pg["date"] < as_of].copy()
+    for s in MLB_STATS:
+        hist[s + "_pp"] = hist[s] / hist["pa"]
+    rates = _ewma(hist, [s + "_pp" for s in MLB_STATS], "pid", hl=20, cur_season=cur_season, prior_w=0.5, last_n=60)
+    pa = _ewma(hist, ["pa"], "pid", hl=4, cur_season=cur_season, prior_w=0.3, last_n=12)
+    form = rates.join(pa[["pa"]])
+    last = hist.sort_values("date").groupby("pid").tail(1).set_index("pid")
+    form["name"], form["team"], form["last_date"] = last["name"], last["team"], last["date"]
+    team_last = hist.groupby("team")["date"].max()
+    form["active"] = form["last_date"].values == team_last.reindex(form["team"]).values
+    opp = _opp_factors(hist[hist["season"] >= cur_season - 1], list(MLB_STATS), cur_season, k=25)
+    return form, opp
+
+
+def mlb_game_props(form, opp, team, opp_team, spreads):
+    f = form[(form["team"] == team) & form["active"] & (form["pa"] >= 3.0) & (form["n_cur"] >= 10)]
+    out = []
+    for pid, r in f.sort_values("pa", ascending=False).head(9).iterrows():
+        props = {}
+        for st, kind in MLB_STATS.items():
+            proj = float(r[st + "_pp"] * r["pa"]) * float(opp[st].get(opp_team, 1.0))
+            props[st] = {"proj": proj, "kind": kind, **spread_params(spreads, st, kind, proj)}
+        out.append({"name": r["name"], "role": f"about {r['pa']:.1f} plate appearances", "props": props})
     return out
