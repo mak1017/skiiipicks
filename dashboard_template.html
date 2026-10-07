@@ -100,8 +100,8 @@ details.how > div{padding:0 0 14px;display:grid;gap:8px;font-size:.9rem;color:va
 
 /* top picks list */
 .t10{list-style:none;margin:0;padding:0;background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:var(--shadow)}
-.t10 li{display:grid;grid-template-columns:1fr 52px;align-items:stretch}
-.t10 li+li{border-top:1px solid var(--line)}
+.t10 > li{display:grid;grid-template-columns:1fr 52px;align-items:stretch}
+.t10 > li + li{border-top:1px solid var(--line)}
 .t10 .main{display:grid;grid-template-columns:30px 1fr auto;gap:2px 10px;align-items:center;text-align:left;background:none;border:0;padding:12px 4px 12px 14px;min-width:0}
 .t10 .n{grid-row:1/3;font-family:var(--cond);font-weight:700;font-size:1.45rem;color:var(--muted);text-align:center;font-variant-numeric:tabular-nums}
 .t10 .pk{display:flex;align-items:center;font-family:var(--cond);font-weight:700;font-size:1.25rem;line-height:1.15;min-width:0}
@@ -128,6 +128,16 @@ details.how > div{padding:0 0 14px;display:grid;gap:8px;font-size:.9rem;color:va
 .wpmini span{display:block;height:100%;border-radius:3px;background:var(--ink);opacity:.85}
 .pick-ats{display:flex;align-items:baseline;font-size:.86rem;line-height:1.4}
 .pick-ats .dot{margin-top:4px}
+.why{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:.85rem;line-height:1.4;color:var(--ink)}
+.why li{position:relative;padding-left:17px}
+.why li::before{position:absolute;left:0;top:0;width:12px;text-align:center;font-weight:700}
+.why .w-plus::before{content:"+";color:var(--good)}
+.why .w-minus::before{content:"!";color:var(--warn)}
+.why .w-info::before{content:"\2022";color:var(--muted)}
+.why-h{font-family:var(--cond);font-weight:600;font-size:.95rem;color:var(--muted);margin:2px 0 0}
+.t10 .why{grid-column:2/4;font-size:.8rem;margin-top:3px}
+.whyp{display:grid;gap:8px}
+.whyp h3{margin:0}
 .pick-notes{margin:0;padding-left:18px;font-size:.84rem;color:var(--muted)}
 @media (hover:hover){.card .main:hover .pick-team,.t10 .main:hover .pk{text-decoration:underline;text-underline-offset:3px}}
 @media (prefers-reduced-motion:no-preference){.card .main:active,.t10 .main:active,.add:active{transform:scale(.985)}}
@@ -151,9 +161,9 @@ details.how > div{padding:0 0 14px;display:grid;gap:8px;font-size:.9rem;color:va
 .wpbar span:last-child{background:var(--board-muted)}
 @media (prefers-reduced-motion:no-preference){.wpbar span,.wpmini span{transition:width .45s cubic-bezier(.2,.8,.2,1)}}
 .wplbl{display:flex;justify-content:space-between;font-size:.84rem;color:var(--board-muted);margin-top:5px;font-variant-numeric:tabular-nums}
-.lines{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.lines{display:grid;grid-template-columns:1.7fr 1fr 1fr;gap:8px;margin-top:12px}
 .ln{background:var(--board-2);border:1px solid var(--board-line);border-radius:12px;padding:8px 10px;min-width:0}
-.ln b{display:block;font-family:var(--cond);font-size:1.15rem;font-weight:600;line-height:1.15;color:var(--board-ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.ln b{display:block;font-family:var(--cond);font-size:1.15rem;font-weight:600;line-height:1.15;color:var(--board-ink);font-variant-numeric:tabular-nums;overflow-wrap:normal}
 .ln small{color:var(--board-muted);font-size:.74rem}
 .vegas{margin-top:10px;font-size:.88rem;line-height:1.45;color:var(--board-ink);background:var(--board-2);border:1px solid var(--board-line);padding:9px 11px;border-radius:12px}
 .opts{display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:.84rem;color:var(--board-muted);gap:8px;flex-wrap:wrap}
@@ -329,6 +339,7 @@ tbody tr:last-child td{border-bottom:none}
       <div id="vegas"></div>
       <div class="opts"><label><input type="checkbox" id="neutral"> Neutral site</label><span id="mDate"></span></div>
     </section>
+    <section class="panel whyp" id="whyBox" aria-label="Why the model makes this pick"></section>
     <div class="seg" id="mTabs" role="tablist" aria-label="Matchup sections"></div>
     <div id="m-props" class="view">
       <p class="sub">Type your sportsbook's line into a box. The row lights up for the stronger side: green 58%+, yellow above the 52.4% break-even, red below it.</p>
@@ -593,6 +604,78 @@ function renderWhere(){
 
 function renderGames(){}
 
+// ---------- "why" breakdowns: built from the team rankings and game notes already in the data ----------
+function sideWords(sp){ return sp==="mlb" ? ["lineup","pitching"] : ["offense","defense"]; }
+function unitEdges(sp, P, O){
+  const tp=T(sp,P), to=T(sp,O), out=[];
+  if (!tp || !to) return out;
+  UNITS[sp].slice(1).forEach(([lab, ok, dk, kind, dir, raw])=>{
+    const dHigher = raw==="reb" ? true : (raw && dir<0) ? true : !raw;
+    if (tp[ok]!=null && to[dk]!=null){ const a=rankIn(sp,ok,tp[ok],dir>0), b=rankIn(sp,dk,to[dk],dHigher);
+      out.push({gap:a.pctile-b.pctile, side:"off", lab, rP:a.rank, rO:b.rank}); }
+    if (to[ok]!=null && tp[dk]!=null){ const a=rankIn(sp,ok,to[ok],dir>0), b=rankIn(sp,dk,tp[dk],dHigher);
+      out.push({gap:b.pctile-a.pctile, side:"def", lab, rP:b.rank, rO:a.rank}); }
+  });
+  return out.filter(e=>e.gap>=0.3).sort((x,y)=>y.gap-x.gap);
+}
+function homeEdge(sp, g){
+  const m=D[sp].model; if (!m || g.neutral) return 0;
+  if (sp==="nba"){ const r=project(sp,g.home,g.away,false); return m.home*(r.pace||100)/100; }
+  return m.home;
+}
+function why(sp, g, max){
+  const pickHome=g.win_home>=0.5, P=pickHome?g.home:g.away, O=pickHome?g.away:g.home;
+  const tp=T(sp,P), to=T(sp,O); if (!tp || !to) return [];
+  const n=D[sp].teams.length, [offW,defW]=sideWords(sp), plus=[], minus=[], info=[];
+  const rk=(t,k)=>t[k+"_rk"];
+  // 1. overall strength
+  if (rk(tp,"net_rating") && rk(to,"net_rating")){
+    const parts = (max||5)>=6 && rk(tp,"off_rating")&&rk(tp,"def_rating") ? ` (${offW} ${ord(rk(tp,"off_rating"))}, ${defW} ${ord(rk(tp,"def_rating"))})` : "";
+    if (rk(tp,"net_rating") < rk(to,"net_rating"))
+      plus.push(`Better team: ${P} ranks ${ord(rk(tp,"net_rating"))} of ${n}${parts}, ${O} ${ord(rk(to,"net_rating"))}.`);
+    else
+      minus.push(`${O} rates higher overall (${ord(rk(to,"net_rating"))} vs ${ord(rk(tp,"net_rating"))} of ${n}), so the pick leans on the factors below.`);
+  }
+  // 2. the biggest matchup edges, at most one per side of the ball
+  const seen={};
+  unitEdges(sp,P,O).forEach(e=>{
+    if (seen[e.side] || plus.length>=3) return; seen[e.side]=1;
+    plus.push(e.side==="off"
+      ? `${e.lab}: ${P} ${offW} ${ord(e.rP)} vs ${O} ${defW} ${ord(e.rO)}.`
+      : `${e.lab}: ${P} ${defW} ${ord(e.rP)} vs ${O} ${offW} ${ord(e.rO)}.`);
+  });
+  // 3. home field
+  const he=homeEdge(sp,g);
+  if (pickHome && !g.neutral && sp!=="mlb" && he>=1) plus.push(`Home field: worth about ${he.toFixed(1)} points.`);
+  // 4. game context from the build (QB changes, rest, injuries, travel, division)
+  (g.notes||[]).forEach(nt=>{
+    const inj=nt.match(/^(.+?): (.+) \((Out|Doubtful|Suspension|Questionable|Day-To-Day)\)$/);
+    if (inj){
+      const [,team,name,st]=inj, hard=/Out|Doubtful|Suspension/.test(st), txt=`${team}'s ${name} is ${st.toLowerCase().replace(/-/g," ")}.`;
+      if (team===P) minus.push(txt); else if (team===O && hard) plus.push(txt); else info.push(txt);
+      return;
+    }
+    const starts=t=>nt.startsWith(t+":")||nt.startsWith(t+" starting")||nt.startsWith(t+" has")||nt.startsWith(t+" on the")||nt.startsWith(t+" travels");
+    const good = (starts(O) && !/ has \d+ more days/.test(nt)) || (starts(P) && / has \d+ more days/.test(nt));
+    const bad  = (starts(P) && !/ has \d+ more days/.test(nt)) || (starts(O) && / has \d+ more days/.test(nt));
+    (good?plus:bad?minus:info).push(nt.endsWith(".")?nt:nt+".");
+  });
+  // 5. honest caveats
+  const conf=Math.max(g.win_home,1-g.win_home);
+  if (conf<0.58) minus.push("Close to a coin flip, so treat it as a lean.");
+  if (sp==="mlb") minus.push("Doesn't know today's starting pitchers.");
+  if (sp==="nba" && D.nba.props_note) minus.push("Uses last season's ratings; check offseason roster moves.");
+  const L=[...plus.map(t=>["plus",t]), ...minus.map(t=>["minus",t]), ...info.map(t=>["info",t])];
+  return L.slice(0, max||5);
+}
+function whyList(items){ return items.length ? `<ul class="why">${items.map(([c,t])=>`<li class="w-${c}">${esc(t)}</li>`).join("")}</ul>` : ""; }
+function renderWhy(){
+  const sp=S.sport, g=scheduled(sp,S.home,S.away), r=projFor(sp,S.home,S.away,S.neutral);
+  const gg = g && !!g.neutral===!!S.neutral ? g : {home:S.home, away:S.away, neutral:S.neutral, win_home:r.wp, notes:[]};
+  const pick = gg.win_home>=0.5 ? gg.home : gg.away;
+  $("whyBox").innerHTML = `<h3>Why the model picks ${esc(pick)}</h3>${whyList(why(sp,gg,7)) || `<p class="sub">These two teams rate almost the same.</p>`}`;
+}
+
 let GSORT="conf";
 function mlLeg(sp,g,pick,opp,conf){ return {id:`ml|${sp}|${g.date}|${g.home}|${g.away}`, label:`${pick} to win`, sub:`${D[sp].label}, over ${opp}, ${dayLabel(g.date)}`, p:conf, game:`${sp}|${g.away}@${g.home}`}; }
 function renderPicks(){
@@ -616,12 +699,12 @@ function renderPicks(){
       ats=`<div class="pick-ats"><span class="dot r-${g.ats_rating||"red"}"></span><span>Spread lean: <b>${esc(side)} ${sideLine>0?"+":""}${sideLine}</b>, ${(pc*100).toFixed(0)}% to cover</span></div>`;
     }
     ats = marketLine(g) + ats;
-    const notes=(g.notes||[]).length?`<ul class="pick-notes">${g.notes.map(n=>`<li>${esc(n)}</li>`).join("")}</ul>`:"";
+    const notes=whyList(why(sp,g,4));
     const leg=mlLeg(sp,g,pick,opp,conf);
     return `<article class="card"><button class="main" data-i="${i}">
       <div class="card-top"><span class="pick-team">${esc(pick)}</span><span class="pick-pct">${Math.min(99,Math.round(conf*100))}%</span><span class="rt rt-${rt}">${RLAB[rt]}</span></div>
       <div class="pick-meta">over ${esc(opp)}, projected ${sc}, ${esc(dayLabel(g.date))}${g.series&&g.series!=="Regular Season"?", "+esc(g.series):""}</div>
-      <div class="wpmini" aria-hidden="true"><span style="width:${(conf*100).toFixed(1)}%"></span></div>${ats}${notes}</button>
+      <div class="wpmini" aria-hidden="true"><span style="width:${(conf*100).toFixed(1)}%"></span></div>${notes}${ats}</button>
       <button class="add" data-leg="${esc(leg.id)}" data-j="${i}" aria-label="Add ${esc(pick)} to slip" aria-pressed="false">+</button></article>`;
   }).join("");
 }
@@ -822,7 +905,7 @@ function renderTop10(){
       const leg=mlLeg(t.sport,t,t.pick,opp,t.conf);
       return `<li><button class="main" data-i="${i}"><span class="n">${t.rank}</span>
         <span class="pk"><span class="dot r-${rt}"></span>${esc(t.pick)}</span><span class="pc">${Math.min(99,Math.round(t.conf*100))}%</span>
-        <span class="mt">over ${esc(opp)}, ${esc(D[t.sport].label)}${t.price!=null?`. ${am(t.price)} at ${esc(t.book)}, <span class="ev-${valRate(t.ev)}" style="font-weight:600">${t.ev>=0?"+":""}${(t.ev*100).toFixed(1)}% EV</span>`:""}${t.injury_flag?'. <span class="warn">Key player out</span>':""}</span></button>
+        <span class="mt">over ${esc(opp)}, ${esc(D[t.sport].label)}${t.price!=null?`. ${am(t.price)} at ${esc(t.book)}, <span class="ev-${valRate(t.ev)}" style="font-weight:600">${t.ev>=0?"+":""}${(t.ev*100).toFixed(1)}% EV</span>`:""}${t.injury_flag?'. <span class="warn">Key player out</span>':""}</span>${whyList(why(t.sport, (D[t.sport].upcoming||[]).find(x=>x.home===t.home&&x.away===t.away) || {home:t.home,away:t.away,neutral:false,win_home:t.pick===t.home?t.conf:1-t.conf,notes:[]}, 2))}</button>
         <button class="add" data-leg="${esc(leg.id)}" data-j="${i}" aria-label="Add ${esc(t.pick)} to slip" aria-pressed="false">+</button></li>`;}).join("");
   }
   const P=D.pnl||{}, lv=P.live&&P.live.top10&&P.live.top10.all, bt=P.backtest&&P.backtest.top10&&P.backtest.top10.all;
@@ -906,7 +989,7 @@ function renderAll(){
   renderBoard();
   $("u1t").textContent=`${S.away} offense vs ${S.home} defense`; $("u1").innerHTML=unitRows(S.away,S.home);
   $("u2t").textContent=`${S.home} offense vs ${S.away} defense`; $("u2").innerHTML=unitRows(S.home,S.away);
-  renderPicks(); renderPL(); renderProps(); renderWhere(); renderPR(); renderBT(); renderMTabs(); syncAddButtons();
+  renderPicks(); renderPL(); renderProps(); renderWhere(); renderPR(); renderBT(); renderMTabs(); renderWhy(); syncAddButtons();
 }
 
 $("home").onchange=e=>{S.home=e.target.value; renderAll();};
