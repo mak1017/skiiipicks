@@ -6,7 +6,7 @@ Source order:
 Whichever works first is used, and the dashboard says which one and when.
 
 What this does: flags injured players on picks, removes ruled-out players from player props, and tags
-questionable ones. It does not change projected scores (except NFL QB changes, handled in stack.py).
+questionable ones. Score changes live elsewhere: NBA absences in nba.injury_adjust, NFL QB changes in stack.py.
 """
 import json
 import re

@@ -380,3 +380,39 @@ def mlb_game_props(form, opp, team, opp_team, spreads):
             props[st] = {"proj": proj, "kind": kind, **spread_params(spreads, st, kind, proj)}
         out.append({"name": r["name"], "role": f"about {r['pa']:.1f} plate appearances", "props": props})
     return out
+
+
+# ---------------- MLB starting pitchers ----------------
+
+PITCHER_STATS = {"pitcher_k": "count"}
+PITCHER_LABELS = {"pitcher_k": "Strikeouts (pitcher)"}
+
+
+def mlb_pitcher_games(starts, names):
+    """starts: mlb.starter_games rows -> the same player-game shape the batter props use (pa = batters faced)."""
+    pg = starts.rename(columns={"bf": "pa", "k": "pitcher_k"}).copy()
+    pg["name"] = pg["pid"].map(names).fillna("Pitcher " + pg["pid"].astype(str))
+    return pg
+
+
+def mlb_pitcher_project(pg, as_of, cur_season):
+    """Strikeouts per batter faced (shrunk toward league) x usual batters faced; opponent factor is how many
+    strikeouts starters get against that lineup per game."""
+    from .mlb import pitcher_form
+    hist = pg[pg["date"] < as_of]
+    f = pitcher_form(hist.rename(columns={"pa": "bf", "pitcher_k": "k"}), as_of, cur_season)
+    form = pd.DataFrame({"pitcher_k_pp": f["k_pp"], "pa": f["bf"], "n_cur": f["n_cur"], "starts": f["starts"],
+                         "team": f["team"], "last_date": f["last_date"]})
+    form["name"] = hist.groupby("pid")["name"].last().reindex(form.index)
+    opp = _opp_factors(hist[hist["season"] >= cur_season - 1], ["pitcher_k"], cur_season, k=25)
+    return form, opp
+
+
+def mlb_pitcher_prop(form, opp, pid, opp_team, spreads):
+    """Prop entry for one probable starter, or None if he hasn't made enough starts this season."""
+    if pid not in form.index or form.loc[pid, "n_cur"] < 3:
+        return None
+    r = form.loc[pid]
+    proj = float(r["pitcher_k_pp"] * r["pa"]) * float(opp["pitcher_k"].get(opp_team, 1.0))
+    return {"name": r["name"], "role": f"Starting pitcher, about {r['pa']:.0f} batters faced", "pitcher": True,
+            "props": {"pitcher_k": {"proj": proj, "kind": "count", **spread_params(spreads, "pitcher_k", "count", proj)}}}

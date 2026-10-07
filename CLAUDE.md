@@ -12,6 +12,8 @@ GitHub Actions rebuilds it every hour and publishes it to GitHub Pages.
 - `skiiipicks/stack.py` - stage-2 game-context model (rest, QB changes, Elo, talent, travel), pick tiers.
 - `skiiipicks/props.py` - player props (NFL, CFB, NBA, MLB batters) with fitted spreads.
 - `skiiipicks/injuries.py` - ESPN live injury page with the sportsdataverse daily feed as fallback.
+  NBA projections adjust for ruled-out rotation players (`nba.py`, bottom). MLB probable starters come from
+  statsapi.mlb.com and adjust MLB projections (`mlb.py`, bottom).
 - `skiiipicks/odds.py` - The Odds API (key in env var `ODDS_API_KEY`), cached in `odds_cache.json`.
 - `skiiipicks/pnl.py` - ratings (green/yellow/red), picks log, grading, CLV, daily top picks.
 - `skiiipicks/dashboard_template.html` - the whole front end (HTML + CSS + JS in one file).
@@ -40,7 +42,7 @@ For front-end work, only run the second command against the existing `dashboard_
 - Five views switched by the bottom tab bar: Today, Games, Matchup, P&L, Model (`go(view)` in the script).
 - Rating thresholds: winner picks green >= 70%, yellow >= 58%. Spread leans green >= 56%, yellow >= 52.4%.
   Props green >= 58%, yellow >= 52.4%. EV green >= +5%. Keep these in sync with `pnl.py`.
-- The parlay slip lives in `localStorage` (`skp_slip`) and is per device.
+- The parlay slip lives in `localStorage` (`skp_slip`, plus `skp_bank` / `skp_kfrac` for Kelly sizing) and is per device.
 - Phone first: nothing may scroll sideways at 390px except tables inside `.scroll`.
 
 ## Model rules

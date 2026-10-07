@@ -1,7 +1,8 @@
 """MLB: opponent-adjusted runs model + inning-by-inning scoring profile.
 
-Limitation: starting pitchers drive a large share of single-game outcomes and
-this model rates teams, not that day's starter. Check probables before using it.
+Team ratings come from runs. When MLB has posted probable starters, each one moves the projection by
+how many runs his recent strikeout, walk and home run rates save over his usual outing, at a rate fitted
+on the previous season.
 """
 import numpy as np
 import pandas as pd
@@ -117,7 +118,150 @@ def upcoming(games, ratings):
     res = []
     for _, g in fut.iterrows():
         ph, pa = ratings.predict(g["home"], g["away"])
-        res.append({"date": g["date"].strftime("%Y-%m-%d"), "home": g["home"], "away": g["away"],
+        res.append({"date": g["date"].strftime("%Y-%m-%d"), "game_pk": int(g["game_pk"]), "home": g["home"], "away": g["away"],
                     "series": g.get("series"), "pred_home": ph, "pred_away": pa,
                     "win_home": win_prob(ph - pa, SIGMA), "line_home": None, "total_line": None})
     return res
+
+
+# ---------------- starting pitchers ----------------
+# Starters come from the play-by-play (the first pitcher each team used). Probable starters for upcoming
+# games come from MLB's public stats API.
+
+PROBABLES_URL = ("https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate={}&endDate={}"
+                 "&hydrate=probablePitcher")
+WALKS = {"walk", "intent_walk", "hit_by_pitch"}
+SP_PRIOR_BF = 120      # batters faced of league-average pitching blended into every starter's rates
+
+
+def starter_games(pbp, games):
+    """One row per starting pitcher per game: batters faced, strikeouts, walks, homers allowed."""
+    from .props import PA_EVENTS
+    p = pbp.merge(games[["game_pk", "home", "away", "date", "season"]], on="game_pk")
+    first = p.sort_values("at_bat_index").groupby(["game_pk", "half_inning"]).first().reset_index()
+    first = first[first["inning"] == 1]
+    top = first["half_inning"] == "top"           # home team pitches the top of the 1st
+    st = pd.DataFrame({"game_pk": first["game_pk"], "half_inning": first["half_inning"], "pid": first["pitcher_id"],
+                       "team": np.where(top, first["home"], first["away"]), "opp": np.where(top, first["away"], first["home"]),
+                       "date": first["date"], "season": first["season"]})
+    pa = p[p["event_type"].isin(PA_EVENTS)]
+    pa = pa.merge(st[["game_pk", "half_inning", "pid"]], on=["game_pk", "half_inning"])
+    pa = pa[pa["pitcher_id"] == pa["pid"]]
+    ev = pa["event_type"]
+    agg = pa.assign(bf=1, k=ev.str.startswith("strikeout").astype(int), bb=ev.isin(WALKS).astype(int),
+                    hr=(ev == "home_run").astype(int)).groupby(["game_pk", "half_inning"])[["bf", "k", "bb", "hr"]].sum()
+    st = st.merge(agg.reset_index(), on=["game_pk", "half_inning"], how="inner").drop(columns="half_inning")
+    return st.rename(columns={"game_pk": "game_id"}).sort_values("date").reset_index(drop=True)
+
+
+def pitcher_form(sg, as_of, cur_season):
+    """Each starter's recent rates (shrunk toward league average) and usual batters faced, before as_of."""
+    from .props import _ewma
+    h = sg[sg["date"] < as_of].copy()
+    if h.empty:
+        return pd.DataFrame(columns=["k_pp", "bb_pp", "hr_pp", "bf", "fip_pp", "n_cur", "starts", "team", "last_date"])
+    lg = {c: h[c].sum() / h["bf"].sum() for c in ("k", "bb", "hr")}
+    tot = h.groupby("pid")[["bf", "k", "bb", "hr"]].sum()
+    rec = _ewma(h.assign(**{c + "_r": h[c] / h["bf"] for c in ("k", "bb", "hr")}),
+                ["k_r", "bb_r", "hr_r"], "pid", hl=8, cur_season=cur_season, prior_w=0.5, last_n=25)
+    bf = _ewma(h, ["bf"], "pid", hl=3, cur_season=cur_season, prior_w=0.3, last_n=8)
+    f = rec.join(bf[["bf"]])
+    w = tot["bf"].reindex(f.index).clip(upper=400)
+    for c in ("k", "bb", "hr"):
+        f[c + "_pp"] = (f[c + "_r"] * w + lg[c] * SP_PRIOR_BF) / (w + SP_PRIOR_BF)
+    f["fip_pp"] = 13 * f["hr_pp"] + 3 * f["bb_pp"] - 2 * f["k_pp"]
+    f.attrs["lg_fip"] = 13 * lg["hr"] + 3 * lg["bb"] - 2 * lg["k"]
+    last = h.groupby("pid").tail(1).set_index("pid")
+    f["team"], f["last_date"] = last["team"], last["date"]
+    f["starts"] = h.groupby("pid").size()
+    return f
+
+
+def starter_effects(sg, games, cur_season):
+    """Walk-forward: each game's starters' run-prevention edge vs. league (runs above average, before
+    scaling), using only starts made before that date."""
+    rows = []
+    starts = sg.set_index(["game_id", "team"])["pid"]
+    for d, day in games.groupby("date"):
+        f = pitcher_form(sg, d, cur_season)
+        lg = f.attrs.get("lg_fip", 0)
+        for g in day.itertuples():
+            r = {"game_pk": g.game_pk}
+            for side, team in (("home", g.home), ("away", g.away)):
+                pid = starts.get((g.game_pk, team))
+                r[side + "_sp"] = sp_value(f, pid, lg)
+            rows.append(r)
+    return pd.DataFrame(rows)
+
+
+def sp_value(f, pid, lg):
+    """Runs a starter saves vs. a league-average starter over his usual outing (positive = better), unscaled."""
+    if pid is None or pid not in f.index:
+        return 0.0
+    r = f.loc[pid]
+    return float((lg - r["fip_pp"]) * r["bf"])
+
+
+def fetch_probables(dates, timeout=15):
+    """{game_pk: {"home": (id, name) or None, "away": ...}} from MLB's stats API for the given dates."""
+    import json
+    import urllib.request
+    if not dates:
+        return {}
+    url = PROBABLES_URL.format(min(dates), max(dates))
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 skiiipicks"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        js = json.loads(r.read().decode("utf-8"))
+    out = {}
+    for d in js.get("dates", []) or []:
+        for g in d.get("games", []) or []:
+            sides = {}
+            for side in ("home", "away"):
+                pp = ((g.get("teams") or {}).get(side) or {}).get("probablePitcher") or {}
+                sides[side] = (int(pp["id"]), pp.get("fullName")) if pp.get("id") else None
+            out[int(g["gamePk"])] = sides
+    return out
+
+
+def fit_starter_effect(bt, se):
+    """Runs per unit of starter value (sp_value), least squares on the backtest's run residuals."""
+    b = bt.merge(se, on="game_pk")
+    x = np.r_[b["away_sp"], b["home_sp"]]
+    y = np.r_[b["home_pts"] - b["pred_home"], b["away_pts"] - b["pred_away"]]
+    y = y - y.mean()
+    return float(-(x @ y) / (x @ x)) if (x @ x) > 0 else 0.0
+
+
+def apply_starter_effect(bt, se, c):
+    b = bt.merge(se, on="game_pk", how="left").fillna({"home_sp": 0.0, "away_sp": 0.0})
+    b["pred_home"] = b["pred_home"] - c * b["away_sp"]
+    b["pred_away"] = b["pred_away"] - c * b["home_sp"]
+    return b
+
+
+def attach_starters(ups, probables, form, lg, c, names):
+    """Add probable starters to upcoming games and move projections by how good each one is."""
+    for u in ups:
+        pr = probables.get(u.get("game_pk")) or {}
+        sides, val = {}, {}
+        for side in ("home", "away"):
+            pp = pr.get(side)
+            if not pp:
+                sides[side], val[side] = None, 0.0
+                continue
+            pid, nm = pp
+            known = pid in form.index
+            r = form.loc[pid] if known else None
+            sides[side] = {"id": pid, "name": nm or names.get(pid, f"Pitcher {pid}"),
+                           "starts": int(r["starts"]) if known else 0,
+                           "k_pct": float(r["k_pp"]) if known else None, "bb_pct": float(r["bb_pp"]) if known else None,
+                           "bf": float(r["bf"]) if known else None}
+            val[side] = sp_value(form, pid, lg)
+        u["starters"] = sides
+        if not (sides["home"] or sides["away"]):
+            continue
+        u["pred_home"] -= c * val["away"]
+        u["pred_away"] -= c * val["home"]
+        u["win_home"] = win_prob(u["pred_home"] - u["pred_away"], SIGMA)
+        u["sp_adj"] = {"home": -c * val["away"], "away": -c * val["home"]}
+    return ups

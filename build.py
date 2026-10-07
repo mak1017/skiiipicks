@@ -180,6 +180,31 @@ def nba_key_players(src, season):
     return keys
 
 
+def nba_injury_model(src, nbt, season):
+    """Points per unit of missing player value: fit on last season's games, tested on this season's,
+    then refit on both for live picks. Returns (effect, test summary, player tracker) or Nones."""
+    try:
+        pg = nba.player_games({season - 1: src("nba_pbox", season - 1), season: src("nba_pbox", season)})
+        mv = nba.missing_value(pg)
+        tracker = nba.current_players(pg)
+        box_prev = nba.load_box({season - 2: src("nba_box", season - 2), season - 1: src("nba_box", season - 1)})
+        bt_prev, _ = nba.backtest(box_prev, season - 1)
+        mv_prev = nba.missing_value(nba.player_games({season - 2: src("nba_pbox", season - 2),
+                                                      season - 1: src("nba_pbox", season - 1)}))
+    except Exception as e:
+        print("NBA injury model skipped:", repr(e)[:200])
+        return None, None, None
+    eff_prev = nba.fit_injury_effect(bt_prev, mv_prev)
+    adj = nba.apply_injury_effect(nbt, mv, eff_prev)
+    base, new = nba.backtest_summary(nbt, nba.SIGMA), nba.backtest_summary(adj, nba.SIGMA)
+    test = {"season": season, "fit_season": season - 1, "games": base["games"],
+            "margin_mae": base["margin_mae"], "margin_mae_inj": new["margin_mae"],
+            "winner_pct": base["winner_pct"], "winner_pct_inj": new["winner_pct"]}
+    eff = nba.fit_injury_effect(pd.concat([bt_prev, nbt], ignore_index=True), pd.concat([mv, mv_prev], ignore_index=True))
+    print("NBA injury effect", eff, "test", test)
+    return eff, test, tracker
+
+
 def add_cfb_props(src, cpbp, nmap, ups, season):
     """College player props. Spreads and the reported test come from last season's games."""
     kinds = {k: v[1] for k, v in props.NFL_STATS.items()}
@@ -203,12 +228,9 @@ def add_cfb_props(src, cpbp, nmap, ups, season):
     return summary
 
 
-def add_mlb_props(src, mpbp, mg, ups, season):
-    """MLB batter props, named through the Chadwick Bureau register."""
-    try:
-        names = props.mlb_names(src("mlb_people"))
-    except Exception as e:
-        print("MLB names unavailable:", repr(e)[:200])
+def add_mlb_props(mpbp, mg, starts, names, ups, season):
+    """MLB batter props, plus strikeout props for probable starters. Names come from the Chadwick Bureau register."""
+    if not names:
         return None
     pg = props.mlb_player_games(mpbp, mg, names)
     last = pg["date"].max()
@@ -218,8 +240,46 @@ def add_mlb_props(src, mpbp, mg, ups, season):
     spreads = props.fit_spreads(bt, props.MLB_STATS)
     form, opp = props.mlb_project(pg, pd.Timestamp.today() + pd.Timedelta(days=1), season)
     _attach(ups, lambda t, o: props.mlb_game_props(form, opp, t, o, spreads))
-    return {"rows": props.summarize(bt, props.MLB_STATS, spreads, props.MLB_LABELS), "season": season,
-            "data_through": last.strftime("%Y-%m-%d")}
+    rows = props.summarize(bt, props.MLB_STATS, spreads, props.MLB_LABELS)
+    try:  # starting pitchers: strikeouts
+        ppg = props.mlb_pitcher_games(starts, names)
+        pbt = props.backtest(ppg, props.mlb_pitcher_project, props.PITCHER_STATS, season, cuts, lambda r, g: ["pitcher_k"])
+        pspreads = props.fit_spreads(pbt, props.PITCHER_STATS)
+        pform, popp = props.mlb_pitcher_project(ppg, pd.Timestamp.today() + pd.Timedelta(days=1), season)
+        for u in ups:
+            for side, other in (("home", "away"), ("away", "home")):
+                sp = (u.get("starters") or {}).get(side)
+                e = sp and props.mlb_pitcher_prop(pform, popp, sp["id"], u[other], pspreads)
+                if e:
+                    e["name"] = sp["name"]
+                    u["props"][side].insert(0, e)
+        rows += props.summarize(pbt, props.PITCHER_STATS, pspreads, props.PITCHER_LABELS)
+    except Exception as e:
+        print("MLB pitcher props skipped:", repr(e)[:200])
+    return {"rows": rows, "season": season, "data_through": last.strftime("%Y-%m-%d")}
+
+
+def mlb_starter_model(src, mbt, starts, season):
+    """Runs per unit of starter value: fit on last season, tested on this season, refit on both for live
+    games. Returns (effect, test summary)."""
+    se = mlb.starter_effects(starts, mbt[["game_pk", "date", "home", "away"]], season)
+    try:
+        g_prev = mlb.load_games(src("mlb_sched", season - 1))
+        bt_prev, _ = mlb.backtest(g_prev, season - 1)
+        s_prev = mlb.starter_games(pd.read_parquet(src("mlb_pbp", season - 1)), g_prev)
+        se_prev = mlb.starter_effects(s_prev, bt_prev[["game_pk", "date", "home", "away"]], season - 1)
+    except Exception as e:
+        print("MLB starter test skipped (no prior season):", repr(e)[:200])
+        return mlb.fit_starter_effect(mbt, se), None
+    c_prev = mlb.fit_starter_effect(bt_prev, se_prev)
+    base = mlb.backtest_summary(mbt, mlb.SIGMA)
+    new = mlb.backtest_summary(mlb.apply_starter_effect(mbt, se, c_prev), mlb.SIGMA)
+    test = {"season": season, "fit_season": season - 1, "games": base["games"],
+            "margin_mae": base["margin_mae"], "margin_mae_sp": new["margin_mae"],
+            "winner_pct": base["winner_pct"], "winner_pct_sp": new["winner_pct"]}
+    c = mlb.fit_starter_effect(pd.concat([bt_prev, mbt], ignore_index=True), pd.concat([se_prev, se], ignore_index=True))
+    print("MLB starter effect", c, "test", test)
+    return c, test
 
 
 def nba_upcoming(src, model, season):
@@ -375,16 +435,24 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
                                "drtg": False, "pace": True})
             nba_ups = nba_upcoming(src, nmodel, season_nba)
             nba_props_summary, nba_props_note = add_nba_props(src, nba_ups, season_nba)
-            LIVE += [pnl.make_row("live", "nba", u["date"], u["home"], u["away"], u["win_home"]) for u in nba_ups]
             nba_map = {r.team_display_name: r.team for r in box.drop_duplicates("team").itertuples()}
             NAMES["nba"] = {v: k for k, v in nba_map.items()}
             binj, binfo = injuries.get("nba", src("nba_inj", season_nba + 1), nba_map)
             injuries.attach(nba_ups, binj, "nba", nba_key_players(src, season_nba))
+            try:  # optional: a failure here leaves projections on team ratings only
+                inj_eff, inj_test, inj_players = nba_injury_model(src, nbt, season_nba)
+                if inj_eff:
+                    nba.injury_adjust(nba_ups, binj, inj_players, inj_eff, injuries.RULED_OUT, injuries._norm)
+            except Exception as e:
+                print("NBA injury adjustment failed:", repr(e)[:200])
+                inj_eff, inj_test = None, None
+            LIVE += [pnl.make_row("live", "nba", u["date"], u["home"], u["away"], u["win_home"]) for u in nba_ups]
             out["nba"] = {"label": "NBA", "season": season_nba, "unit": "pts", "teams": nteams,
                           "model": {**ratings_block(nmodel.eff), "pace_mu": nmodel.pace.mu,
                                     "pace_off": nmodel.pace.off, "pace_dfn": nmodel.pace.dfn},
                           "sigma": nba.SIGMA, "upcoming": nba_ups, "props_summary": nba_props_summary,
                           "props_note": nba_props_note, "injury_info": binfo, "prop_labels": props.NBA_LABELS, "total_sd": total_sd(nsumm),
+                          "injury_model": {"effect": inj_eff, "test": inj_test} if inj_eff else None,
                           "backtest": {"current": {"season": season_nba, **nsumm}}}
             break
         except Exception as e:  # season data not out yet, or a source is down
@@ -402,14 +470,34 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
 
             mmodel = mlb.make_fit(mg, season_mlb)(pd.Timestamp.today() + pd.Timedelta(days=1))
             mups = mlb.upcoming(mg, mmodel)
-            LIVE += [pnl.make_row("live", "mlb", u["date"], u["home"], u["away"], u["win_home"]) for u in mups]
             mpbp = pd.read_parquet(src("mlb_pbp", season_mlb))
+            starts = mlb.starter_games(mpbp, mg)
+            try:
+                sp_c, sp_test = mlb_starter_model(src, mbt, starts, season_mlb)
+            except Exception as e:  # starters still show and get props; projections stay on team ratings
+                print("MLB starter model failed:", repr(e)[:200])
+                sp_c, sp_test = 0.0, None
+            try:
+                names = props.mlb_names(src("mlb_people"))
+            except Exception as e:
+                print("MLB names unavailable:", repr(e)[:200])
+                names = {}
+            try:
+                probables, sp_info = mlb.fetch_probables(sorted({u["date"] for u in mups})), {"source": "MLB stats API"}
+            except Exception as e:
+                print("MLB probable starters unavailable:", repr(e)[:200])
+                probables, sp_info = {}, {"source": None, "error": type(e).__name__}
+            sp_form = mlb.pitcher_form(starts, pd.Timestamp.today() + pd.Timedelta(days=1), season_mlb)
+            mlb.attach_starters(mups, probables, sp_form, sp_form.attrs.get("lg_fip", 0), sp_c, names)
+            LIVE += [pnl.make_row("live", "mlb", u["date"], u["home"], u["away"], u["win_home"]) for u in mups]
             NAMES["mlb"] = {v: k for k, v in mlb.TEAM_ABBR.items()}
             prof = mlb.inning_profile(mpbp, mg)
             mteams = mlb.team_profiles(mg, mmodel, prof, season_mlb)
             add_ranks(mteams, {"off_rating": True, "def_rating": True, "net_rating": True})
             out["mlb"] = {"label": "MLB", "season": season_mlb, "unit": "runs", "teams": mteams,
-                          "props_summary": add_mlb_props(src, mpbp, mg, mups, season_mlb), "prop_labels": props.MLB_LABELS,
+                          "props_summary": add_mlb_props(mpbp, mg, starts, names, mups, season_mlb),
+                          "prop_labels": {**props.MLB_LABELS, **props.PITCHER_LABELS},
+                          "starter_model": {"effect": sp_c, "test": sp_test, **sp_info},
                           "model": ratings_block(mmodel), "sigma": mlb.SIGMA, "total_sd": total_sd(msumm), "upcoming": mups,
                           "backtest": {"current": {"season": season_mlb, **msumm}}}
             break

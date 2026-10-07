@@ -136,7 +136,9 @@ def top10_today(games, today):
         p = max(g["win_home"], 1 - g["win_home"])
         pick = g["home"] if g["win_home"] >= 0.5 else g["away"]
         hurt = [n for n in (g.get("notes") or []) if n.startswith(pick + ":") and re.search(r"\((Out|Doubtful)\)", n)]
-        cands.append({**g, "pick": pick, "conf": p, "score": p - (INJ_PENALTY if hurt else 0), "injury_flag": bool(hurt)})
+        priced_in = bool(g.get("injury_adj"))  # NBA: the projection already accounts for who is out
+        cands.append({**g, "pick": pick, "conf": p, "score": p - (INJ_PENALTY if hurt and not priced_in else 0),
+                      "injury_flag": bool(hurt)})
     # today's games only (Eastern time); fewer than 10 on light days
     day = [c for c in cands if c["date"] == today]
     return sorted(day, key=lambda c: -c["score"])[:10]

@@ -143,6 +143,7 @@ details.how > div{padding:0 0 14px;display:grid;gap:8px;font-size:.9rem;color:va
 .score{display:grid;grid-template-columns:1fr auto 1fr;align-items:end;margin:18px 0 6px;text-align:center}
 .num{font-family:var(--cond);font-weight:800;font-size:clamp(3.6rem,18vw,5.6rem);line-height:.9;color:var(--lamp);text-shadow:0 0 22px rgba(245,184,61,.35);font-variant-numeric:tabular-nums}
 .tm{font-family:var(--cond);font-weight:600;font-size:1.2rem;color:var(--board-ink);margin-top:4px}
+.spn{font-size:.78rem;line-height:1.25;color:var(--board-muted);margin-top:2px;padding:0 4px}
 .dash{font-family:var(--cond);font-size:2.4rem;color:var(--board-line);padding:0 6px 14px}
 .wp{margin:14px 0 6px}
 .wpbar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--board-2);gap:2px}
@@ -171,18 +172,23 @@ details.how > div{padding:0 0 14px;display:grid;gap:8px;font-size:.9rem;color:va
 .pgroup h3{margin:10px 0 2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .pgroup .who{font-size:.8rem;color:var(--muted);margin:0 0 4px}
 #props{display:grid;gap:10px}
-.prow{display:grid;grid-template-columns:minmax(0,1fr) 64px 78px 32px;gap:6px;align-items:center;margin:0 -8px;padding:8px;border-radius:12px;border-top:1px solid var(--line)}
+.prow{display:grid;grid-template-columns:84px minmax(0,1fr) 36px;grid-template-areas:"pl pl add" "in po add";gap:6px 10px;align-items:center;margin:0 -8px;padding:10px 8px;border-radius:12px;border-top:1px solid var(--line)}
+.prow.td{grid-template-areas:"pl pl add" "po po add"}
 .pgroup h3+.prow,.pgroup .who+.prow,.prow[data-rate]+.prow,.prow:first-child{border-top-color:transparent}
 @media (prefers-reduced-motion:no-preference){.prow{transition:background-color .2s}}
 .prow[data-rate="green"]{background:var(--good-bg)}
 .prow[data-rate="yellow"]{background:var(--warn-bg)}
 .prow[data-rate="red"]{background:var(--bad-bg)}
-.prow .pl{font-size:.86rem;line-height:1.25;color:var(--muted)}
-.prow .pl b{display:block;font-family:var(--cond);font-size:1.12rem;font-weight:600;color:var(--ink)}
-.prow input{width:100%;padding:7px 4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);text-align:center;font-variant-numeric:tabular-nums}
-.prow .po{font-size:.8rem;text-align:right;font-variant-numeric:tabular-nums;line-height:1.3;color:var(--muted)}
-.prow .po b{font-family:var(--cond);font-size:1.12rem;color:var(--ink)}
-.prow .add{margin:auto}
+.prow .pl{grid-area:pl;font-size:.86rem;line-height:1.3;color:var(--muted);min-width:0}
+.prow .pl b{font-family:var(--cond);font-size:1.15rem;font-weight:600;color:var(--ink);margin-right:6px}
+.prow input{grid-area:in;width:100%;padding:7px 4px;border:1px solid var(--line);border-radius:10px;background:var(--surface);text-align:center;font-variant-numeric:tabular-nums}
+.prow .po{grid-area:po;font-size:.84rem;font-variant-numeric:tabular-nums;line-height:1.3;color:var(--muted)}
+.prow .po b{font-family:var(--cond);font-size:1.15rem;color:var(--ink)}
+.prow .add{grid-area:add;margin:auto}
+@media (min-width:560px){
+  .prow{grid-template-columns:minmax(0,1fr) 84px 150px 36px;grid-template-areas:"pl in po add"}
+  .prow.td{grid-template-areas:"pl pl po add"}
+}
 
 /* matchup breakdown */
 .key{display:flex;gap:14px;font-size:.82rem;color:var(--muted);margin-bottom:10px;flex-wrap:wrap}
@@ -251,7 +257,8 @@ tbody tr:last-child td{border-bottom:none}
 .legs .lp{font-family:var(--cond);font-weight:700;font-size:1.15rem;font-variant-numeric:tabular-nums}
 .rm{width:32px;height:32px;border-radius:50%;border:0;background:none;color:var(--muted);font-size:1.25rem}
 .slipnums{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.oddsin{display:grid;gap:6px}
+.slipin{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.oddsin{display:grid;gap:6px;align-content:start}
 .oddsin label{font-weight:600;font-size:.9rem}
 .oddsin input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:var(--surface);font-size:1.1rem;font-variant-numeric:tabular-nums}
 .evbox{border-radius:12px;padding:11px 13px;font-size:.92rem;background:var(--surface);border:1px solid var(--line)}
@@ -259,6 +266,9 @@ tbody tr:last-child td{border-bottom:none}
 .evbox.ev-yellow{background:var(--warn-bg);border-color:transparent;color:var(--ink)}
 .evbox.ev-red{background:var(--bad-bg);border-color:transparent;color:var(--ink)}
 .evbox b{font-family:var(--cond);font-size:1.2rem}
+.kelly{display:grid;gap:10px}
+.kelly h3{margin:4px 0 0}
+.kelly .seg button{font-size:.95rem;padding:6px 10px}
 
 /* bottom tab bar */
 .nav{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--glass);-webkit-backdrop-filter:saturate(1.4) blur(14px);backdrop-filter:saturate(1.4) blur(14px);
@@ -313,9 +323,9 @@ tbody tr:last-child td{border-bottom:none}
         <div><div class="side-lbl">HOME</div><select id="home" aria-label="Home team"></select></div>
       </div>
       <div class="score">
-        <div><div class="num" id="sa">0</div><div class="tm" id="ta"></div></div>
+        <div><div class="num" id="sa">0</div><div class="tm" id="ta"></div><div class="spn" id="spa"></div></div>
         <div class="dash">&ndash;</div>
-        <div><div class="num" id="sh">0</div><div class="tm" id="th"></div></div>
+        <div><div class="num" id="sh">0</div><div class="tm" id="th"></div><div class="spn" id="sph"></div></div>
       </div>
       <div class="wp">
         <div class="wpbar"><span id="wpa"></span><span id="wph"></span></div>
@@ -378,8 +388,17 @@ tbody tr:last-child td{border-bottom:none}
       <div class="stat"><b id="slipP">&ndash;</b><small>chance every leg hits</small></div>
       <div class="stat"><b id="slipFair">&ndash;</b><small>fair odds for that chance</small></div>
     </div>
-    <div class="oddsin"><label for="slipOdds">Payout your book offers</label><input id="slipOdds" inputmode="text" placeholder="+250" autocomplete="off"></div>
+    <div class="slipin">
+      <div class="oddsin"><label for="slipOdds">Payout your book offers</label><input id="slipOdds" inputmode="text" placeholder="+250" autocomplete="off"></div>
+      <div class="oddsin"><label for="slipBank">Your bankroll</label><input id="slipBank" inputmode="decimal" placeholder="$500" autocomplete="off"></div>
+    </div>
     <div class="evbox" id="slipEV"></div>
+    <div class="kelly" id="kelly" hidden>
+      <h3>How much to bet</h3>
+      <div class="seg" id="kFrac" aria-label="Kelly fraction"></div>
+      <div class="evbox" id="slipKelly"></div>
+      <p class="sub">Kelly sizing bets more when the edge is bigger and the payout is shorter. It trusts the model's chances completely, and a parlay multiplies any error in them, so a quarter of full Kelly is the safer default.</p>
+    </div>
     <button class="btn" id="slipClear">Clear slip</button>
   </div>
 </div>
@@ -452,6 +471,9 @@ function marketLine(g){
   const vr=valRate(m.ev), pick=(g.win_home>=0.5)?g.home:g.away;
   return `<div class="pick-ats"><span class="dot r-${vr}"></span><span>Best price: <b>${esc(pick)} ${am(m.pick_price)}</b> at ${esc(m.pick_book)}. Market ${m.mkt_pick!=null?(m.mkt_pick*100).toFixed(0)+"%":"–"}, model ${(Math.max(g.win_home,1-g.win_home)*100).toFixed(0)}%. <b>${m.ev>=0?"+":""}${(m.ev*100).toFixed(1)}% EV</b>${m.ev_other>0.03?`. Value is on the other side: ${esc(pick===g.home?g.away:g.home)} ${am(pick===g.home?m.ml_best.away:m.ml_best.home)} (${(m.ev_other*100).toFixed(1)}% EV)`:""}</span></div>`;
 }
+function spName(x){ return x ? `SP ${x.name}${x.k_pct!=null?`, ${(x.k_pct*100).toFixed(0)}% K`:""}` : "SP not announced"; }
+function spLine(g){ const st=g.starters; if(!st||(!st.home&&!st.away)) return "";
+  return `<div class="pick-meta">Starters: ${esc(st.away?st.away.name:"TBD")} (${esc(g.away)}) vs ${esc(st.home?st.home.name:"TBD")} (${esc(g.home)})</div>`; }
 function tierOf(p){p=Math.max(p,1-p);return p>=.75?"Strong":p>=.65?"Solid":p>=.57?"Lean":"Toss-up";}
 
 function fmt(v, kind){
@@ -517,6 +539,8 @@ function renderBoard(){
     $("vegas").innerHTML = `<div class="vegas">${esc(txt)}</div>`;
   } else $("vegas").innerHTML = "";
   $("asof").textContent = `Updated ${D.built_at?new Date(D.built_at).toLocaleString([], {weekday:"short",hour:"numeric",minute:"2-digit"}):D.built}`;
+  const gs=sp==="mlb"&&scheduled(sp,S.home,S.away), st=(gs&&gs.starters)||{};
+  $("spa").textContent = gs ? spName(st.away) : ""; $("sph").textContent = gs ? spName(st.home) : "";
   const gg=scheduled(sp,S.home,S.away); $("mDate").textContent = gg ? [dayLabel(gg.date), gg.series&&gg.series!=="Regular Season"?gg.series:null].filter(Boolean).join(", ") : "Custom matchup";
 }
 
@@ -581,7 +605,7 @@ function renderWhere(){
     out.push(bars(`${S.away} offense vs ${S.home} defense, by quarter`, q, a.q_for, h.q_against, `${S.away} scores`, `${S.home} allows`));
     out.push(bars(`${S.home} offense vs ${S.away} defense, by quarter`, q, h.q_for, a.q_against, `${S.home} scores`, `${S.away} allows`));
   } else {
-    $("whereS").textContent="Average runs per game in each part of the game. Starting pitchers aren't in this model, so check probables before leaning on early-inning numbers.";
+    $("whereS").textContent="Average runs per game in each part of the game. These are team averages, so they don't know who starts today; the starter matters most in innings 1-5.";
     const k=["1-3","4-6","7-9"], v=(o,f)=>k.map(x=>(o[f]&&o[f][x])||0);
     out.push(bars(`${S.away} bats vs ${S.home} pitching, by inning`, ["Inn 1-3","Inn 4-6","Inn 7-9"], v(a,"inn_for"), v(h,"inn_against"), `${S.away} scores`, `${S.home} allows`));
     out.push(bars(`${S.home} bats vs ${S.away} pitching, by inning`, ["Inn 1-3","Inn 4-6","Inn 7-9"], v(h,"inn_for"), v(a,"inn_against"), `${S.home} scores`, `${S.away} allows`));
@@ -621,7 +645,7 @@ function renderPicks(){
     return `<article class="card"><button class="main" data-i="${i}">
       <div class="card-top"><span class="pick-team">${esc(pick)}</span><span class="pick-pct">${Math.min(99,Math.round(conf*100))}%</span><span class="rt rt-${rt}">${RLAB[rt]}</span></div>
       <div class="pick-meta">over ${esc(opp)}, projected ${sc}, ${esc(dayLabel(g.date))}${g.series&&g.series!=="Regular Season"?", "+esc(g.series):""}</div>
-      <div class="wpmini" aria-hidden="true"><span style="width:${(conf*100).toFixed(1)}%"></span></div>${ats}${notes}</button>
+      ${sp==="mlb"?spLine(g):""}<div class="wpmini" aria-hidden="true"><span style="width:${(conf*100).toFixed(1)}%"></span></div>${ats}${notes}</button>
       <button class="add" data-leg="${esc(leg.id)}" data-j="${i}" aria-label="Add ${esc(pick)} to slip" aria-pressed="false">+</button></article>`;
   }).join("");
 }
@@ -641,7 +665,7 @@ function prow(label, sublabel, proj, sd, dec, kind, tdword, phiArg, who){
   const base=(who?who+" ":"")+label, legId=`prop|${S.sport}|${S.away}@${S.home}|${base}`;
   if (kind==="td"){
     const p=1-Math.exp(-proj), word=tdword||"to score";
-    return `<div class="prow"><div class="pl"><b>${esc(label)}</b>${esc(sublabel)}</div><div></div><div class="po"><b>${(p*100).toFixed(0)}%</b><br>${word}</div>
+    return `<div class="prow td"><div class="pl"><b>${esc(label)}</b>${esc(sublabel)}</div><div class="po"><b>${(p*100).toFixed(0)}%</b> ${word}</div>
       <button class="add sm" data-leg="${esc(legId)}" data-td="${p}" data-base="${esc((who||label)+" "+word)}" aria-label="Add ${esc(base)} to slip" aria-pressed="false">+</button></div>`;
   }
   return `<div class="prow"><div class="pl"><b>${esc(label)}</b>${esc(sublabel)} ${proj.toFixed(dec)}</div>
@@ -657,7 +681,7 @@ function wireProps(){
       const p=inp.dataset.kind==="count"?1-countCdf(Math.floor(l), +inp.dataset.proj, +inp.dataset.phi||1.2):pOver(+inp.dataset.proj, +inp.dataset.sd, l), q=Math.max(p,1-p);
       const rate=q>=0.58?"green":q>=0.524?"yellow":"red", side=p>=0.5?"over":"under";
       inp.closest(".prow").dataset.rate=rate; inp.dataset.p=p;
-      o.innerHTML=side==="over"?`<b>${(p*100).toFixed(0)}%</b> over<br>${((1-p)*100).toFixed(0)}% under`:`${(p*100).toFixed(0)}% over<br><b>${((1-p)*100).toFixed(0)}%</b> under`;};
+      o.innerHTML=side==="over"?`<b>${(p*100).toFixed(0)}%</b> over · ${((1-p)*100).toFixed(0)}% under`:`<b>${((1-p)*100).toFixed(0)}%</b> under · ${(p*100).toFixed(0)}% over`;};
     inp.oninput=upd; upd();
   });
 }
@@ -691,23 +715,24 @@ function renderProps(){
     } else {
       const pa1=(A.yrfi_off+H.yrfi_def)/2, ph1=(H.yrfi_off+A.yrfi_def)/2, yr=1-(1-pa1)*(1-ph1);
       const f5=(A.f5_for+H.f5_against)/2+(H.f5_for+A.f5_against)/2;
-      h+=`<div class="pgroup"><h3>Early innings</h3><div class="prow"><div class="pl"><b>Run in the 1st inning</b>Either team scores</div><div></div><div class="po"><b>${(yr*100).toFixed(0)}%</b> yes<br>${((1-yr)*100).toFixed(0)}% no</div></div>`;
+      h+=`<div class="pgroup"><h3>Early innings</h3><div class="prow td"><div class="pl"><b>Run in the 1st inning</b>Either team scores</div><div class="po"><b>${(yr*100).toFixed(0)}%</b> yes · ${((1-yr)*100).toFixed(0)}% no</div></div>`;
       h+=prow("First 5 innings total","Projected",f5,tsd*Math.sqrt(5/9),1)+`</div>`;
-      h+=`<p class="sub">Starting pitchers aren't in this model and matter most for early-inning props, so check probables first.</p>`;
+      const st=(g&&g.starters)||{};
+      h+=`<p class="sub">${st.home&&st.away?`The full-game projection includes today's starters (${esc(st.away.name)} and ${esc(st.home.name)}), but these early-inning numbers are team averages. Starters matter most here, so lean on them less.`:"Probable starters aren't posted for this game yet, and early-inning numbers are team averages, so check probables first."}</p>`;
     }
   } else if (PT==="team"){
     for (const [t,o,pts] of [[S.away,S.home,r.pa],[S.home,S.away,r.ph]]){
       const TT=T(sp,t), OO=T(sp,o);
       h+=`<div class="pgroup"><h3>${esc(t)}</h3>`+prow(`${t} team total`,"Projected",pts,team_sd,1);
       if (sp!=="mlb"){ const sh=share(TT,OO,[0,1]); h+=prow(`${t} 1st half points`,"Projected",pts*sh,team_sd*Math.sqrt(sh),1); }
-      else { const p1=(TT.yrfi_off+OO.yrfi_def)/2; h+=`<div class="prow"><div class="pl"><b>${esc(t)} scores in the 1st</b></div><div></div><div class="po"><b>${(p1*100).toFixed(0)}%</b> yes</div></div>`;
+      else { const p1=(TT.yrfi_off+OO.yrfi_def)/2; h+=`<div class="prow td"><div class="pl"><b>${esc(t)} scores in the 1st</b></div><div class="po"><b>${(p1*100).toFixed(0)}%</b> yes</div></div>`;
         h+=prow(`${t} first 5 innings runs`,"Projected",(TT.f5_for+OO.f5_against)/2,team_sd*Math.sqrt(5/9),1); }
       h+=`</div>`;
     }
   } else if (PT==="injuries"){
     const inf=d.injury_info||{};
     const when=inf.as_of?(inf.as_of.includes("T")?new Date(inf.as_of).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}):inf.as_of):"unknown";
-    h+=`<p class="sub">${inf.source?`From the ${esc(inf.source)}, as of ${esc(when)}.`:"Injury report unavailable for this build."} Players ruled out are removed from player props. Injuries don't change the projected score, so treat a pick as weaker if a key player is out.</p>`;
+    h+=`<p class="sub">${inf.source?`From the ${esc(inf.source)}, as of ${esc(when)}.`:"Injury report unavailable for this build."} Players ruled out are removed from player props. ${sp==="nba"?"When a rotation player is ruled out, the projected score already accounts for it (the game's notes say by how much). Questionable and day-to-day players are not adjusted for.":"Injuries don't change the projected score (except starting QB changes), so treat a pick as weaker if a key player is out."}</p>`;
     if (!g){ h+=`<div class="empty">Injury reports show for scheduled games. Pick one from Picks or Upcoming games.</div>`; }
     else for (const side of ["away","home"]){
       const L=(g.injuries||{})[side]||[], t=g[side];
@@ -717,7 +742,7 @@ function renderProps(){
     if (!hasPlayers){
       h=`<div class="empty">${esc(d.props_note || (g ? "No player projections for this game yet." : "Player props are available for scheduled games. Pick one from Picks or Upcoming games."))}</div>`;
     } else {
-      if (sp==="mlb" && d.props_summary && d.props_summary.data_through) h+=`<p class="sub">Based on games through ${esc(d.props_summary.data_through)}, the latest the free play-by-play data goes. Lineups are the players who batted in each team's last game in that data, so confirm the real lineup before betting.</p>`;
+      if (sp==="mlb" && d.props_summary && d.props_summary.data_through) h+=`<p class="sub">Based on games through ${esc(d.props_summary.data_through)}, the latest the free play-by-play data goes. Starting pitchers' strikeouts come first once MLB posts probables. Batters are the players who batted in each team's last game in that data, so confirm the real lineup before betting.</p>`;
       if (sp==="cfb") h+=`<p class="sub">No free injury report for college football, so check that players are active before betting.</p>`;
       h+=`<div class="side-pick">${[S.away,S.home].map((t,i)=>`<button class="ptab" aria-selected="${(i?"home":"away")===PSIDE}" data-s="${i?"home":"away"}">${esc(t)}</button>`).join("")}</div>`;
       for (const pl of g.props[PSIDE]||[]){
@@ -852,6 +877,18 @@ function renderPR(){
   $("pr").querySelectorAll("th[data-k]").forEach(th=>{ if(!th.dataset.k) return; th.onclick=()=>{const k=th.dataset.k; if(S.sort===k)S.dir*=-1; else {S.sort=k;S.dir=-1;} renderPR();};});
 }
 
+const pc1=x=>(x*100).toFixed(1)+"%";
+function nbaRead(){
+  const t=((D.nba||{}).injury_model||{}).test;
+  if (!t) return "Injuries: projections move for rotation players ruled out, using a rate fitted on past games.";
+  return `Injuries: when rotation players are out, the projection drops by what similar absences cost in past games. Fitted on ${t.fit_season-1}-${String(t.fit_season).slice(2)} and tested on ${t.season-1}-${String(t.season).slice(2)} (${t.games.toLocaleString()} games), it cut the average miss on the margin from ±${t.margin_mae.toFixed(2)} to ±${t.margin_mae_inj.toFixed(2)} and picked ${pc1(t.winner_pct_inj)} of winners instead of ${pc1(t.winner_pct)}. That test knows who actually sat, which a pregame report mostly but not always does.`;
+}
+function mlbRead(){
+  const m=(D.mlb||{}).starter_model, t=m&&m.test;
+  const src=m&&m.source===null?" Probable starters couldn't be loaded for this build, so today's projections use team ratings only.":"";
+  if (!t) return "When probable starters are posted, each one moves the projection by his recent strikeout, walk and home run rates."+src;
+  return `When probable starters are posted, each one moves the projection by his recent strikeout, walk and home run rates. Fitted on ${t.fit_season} and tested on ${t.season} (${t.games.toLocaleString()} games), that picked ${pc1(t.winner_pct_sp)} of winners instead of ${pc1(t.winner_pct)} and trimmed the average miss from ±${t.margin_mae.toFixed(2)} to ±${t.margin_mae_sp.toFixed(2)} runs: real but small.`+src;
+}
 function renderBT(){
   const sp=S.sport, b=D[sp].backtest, parts=[];
   const block=(x,title)=>{
@@ -877,8 +914,8 @@ function renderBT(){
   const READ={
     nfl:"Tested on 917 games across four seasons, the model picks about 63% of winners. Starting-QB changes (about 2 points) and rest (about 0.2 points per day) are real, but Vegas already prices them in: against the spread it's at 48%, below the 52.4% break-even.",
     cfb:"Adding Elo, recruiting talent, returning production, returning QBs, and travel made the model better every season: 73.7% winners over 2,669 games, up from 71.5%. Against the spread it's 50.9%, still short of the 52.4% needed to profit.",
-    nba:"Opening-week picks use 2025-26 ratings at full strength, which tested best on last season's openers, but they can't see offseason trades or injuries, so check rosters. No historical betting lines were available for the NBA, so this measures winners and margins only. Teams on the second night of a back-to-back score about 2.5 fewer points than the model expects, so shade those games when the season starts.",
-    mlb:"Baseball is the hardest sport to predict game by game, and this model rates teams without knowing the starting pitcher. Vegas typically picks MLB winners about 58-59% of the time."
+    nba:nbaRead()+" Opening-week picks use 2025-26 ratings at full strength, which tested best on last season's openers, but they can't see offseason trades or injuries, so check rosters. No historical betting lines were available for the NBA, so this measures winners and margins only. Teams on the second night of a back-to-back score about 2.5 fewer points than the model expects, so shade those games when the season starts.",
+    mlb:"Baseball is the hardest sport to predict game by game. Vegas typically picks MLB winners about 58-59% of the time. "+mlbRead()
   };
   parts.push(`<div class="callout">${READ[sp]}</div>`);
   const ss=D[sp].seasons;
@@ -892,7 +929,7 @@ function renderBT(){
   }
   const ps=D[sp].props_summary;
   if (ps && ps.rows && ps.rows.length){
-    parts.push(`<h3>Player props, tested on ${sp==="nba"?(ps.season-1)+"-"+String(ps.season).slice(2):ps.season}${sp==="mlb"?" (batters)":""}</h3><p class="sub" style="margin-bottom:8px">Projections made before each game. "Lean" is how often the model's side won when it was 60%+ on one side of a line set at the player's season average. Sportsbook lines are sharper than that, so expect less in real betting.</p><div class="scroll"><table><thead><tr><th>Prop</th><th>Miss</th><th>Season avg miss</th><th>Lean won</th><th>Leans</th></tr></thead><tbody>${
+    parts.push(`<h3>Player props, tested on ${sp==="nba"?(ps.season-1)+"-"+String(ps.season).slice(2):ps.season}</h3><p class="sub" style="margin-bottom:8px">Projections made before each game. "Lean" is how often the model's side won when it was 60%+ on one side of a line set at the player's season average. Sportsbook lines are sharper than that, so expect less in real betting.</p><div class="scroll"><table><thead><tr><th>Prop</th><th>Miss</th><th>Season avg miss</th><th>Lean won</th><th>Leans</th></tr></thead><tbody>${
       ps.rows.map(r=>`<tr><td>${esc(r.stat)}</td><td>${r.mae.toFixed(1)}</td><td>${r.naive_mae.toFixed(1)}</td><td>${r.lean_hit!=null?(r.lean_hit*100).toFixed(0)+"%":(r.td_pred!=null?"Said "+(r.td_pred*100).toFixed(0)+"%, was "+(r.td_actual*100).toFixed(0)+"%":"–")}</td><td>${r.lean_n||"–"}</td></tr>`).join("")}</tbody></table></div>`);
   }
   if (!ss || !ss.length){
@@ -970,7 +1007,8 @@ function renderSlip(){
   $("slipFair").textContent = n ? toAm(p) : "–";
   slipEV();
 }
-function slipEV(){
+function slipEV(){ evText(); slipKelly(); }
+function evText(){
   const box=$("slipEV"), n=SLIP.length, p=slipProb(), pay=amToPay($("slipOdds").value);
   if (!n){ box.className="evbox"; box.textContent="Add legs to see whether the payout is worth it."; return; }
   if (pay==null){ box.className="evbox"; box.innerHTML=`Enter the payout your book shows, like <b>+250</b>. Anything better than <b>${toAm(p)}</b> is worth it on average.`; return; }
@@ -978,6 +1016,29 @@ function slipEV(){
   box.className="evbox "+cls;
   box.innerHTML=`<b>${ev>=0?"+":""}${(ev*100).toFixed(0)}%</b> expected return per bet. ${ev>=0.05?"Good price for this slip.":ev>=0?"Barely worth it.":"The payout is too low for how often this hits, so it loses money over time."}`;
 }
+// Kelly: the share of bankroll that grows it fastest if the chances are right. f = (b*p - (1-p)) / b, b = net payout.
+const KFRACS=[[0.25,"¼ Kelly"],[0.5,"½ Kelly"],[1,"Full Kelly"]];
+let KF=parseFloat(load("skp_kfrac")); if(!KFRACS.some(k=>k[0]===KF)) KF=0.25;
+$("slipBank").value=load("skp_bank")||"";
+function bankroll(){ const v=parseFloat(String($("slipBank").value).replace(/[^\d.]/g,"")); return isFinite(v)&&v>0?v:null; }
+const money=x=>"$"+(x>=100?Math.round(x).toLocaleString():x.toFixed(2));
+function slipKelly(){
+  const n=SLIP.length, p=slipProb(), pay=amToPay($("slipOdds").value), box=$("slipKelly");
+  $("kelly").hidden = !n || pay==null;
+  if ($("kelly").hidden) return;
+  $("kFrac").innerHTML=KFRACS.map(([f,l])=>`<button aria-pressed="${f===KF}" data-f="${f}">${l}</button>`).join("");
+  const full=(pay*p-(1-p))/pay;
+  if (full<=0){ box.className="evbox ev-red"; box.innerHTML=`<b>Skip it.</b> At this payout the slip loses money on average, so Kelly says bet nothing.`; return; }
+  const f=full*KF, bank=bankroll(), lab=KFRACS.find(k=>k[0]===KF)[1];
+  box.className="evbox "+(f>0.05?"ev-yellow":"ev-green");
+  box.innerHTML=(bank ? `<b>Bet ${money(f*bank)}</b>, ${(f*100).toFixed(1)}% of your bankroll at ${lab}.` : `<b>Bet ${(f*100).toFixed(1)}%</b> of your bankroll at ${lab}.`)
+    + (KF!==1 ? ` Full Kelly would be ${(full*100).toFixed(1)}%${bank?` (${money(full*bank)})`:""}.` : "")
+    + (f>0.05 ? " That's a lot on one slip; many bettors cap any single bet at 1 to 5% of their bankroll." : "")
+    + (bank ? "" : " Enter your bankroll to see it in dollars.");
+}
+$("kFrac").onclick=e=>{ const b=e.target.closest("[data-f]"); if(!b) return; KF=+b.dataset.f; store("skp_kfrac", KF); slipKelly(); };
+$("slipBank").oninput=()=>{ store("skp_bank", $("slipBank").value); slipKelly(); };
+
 function openSheet(){ $("sheet").hidden=false; renderSlip(); $("slipDone").focus(); }
 function closeSheet(){ $("sheet").hidden=true; $("slipBar").focus(); }
 $("slipBar").onclick=openSheet; $("slipDone").onclick=closeSheet; $("sheetBg").onclick=closeSheet;

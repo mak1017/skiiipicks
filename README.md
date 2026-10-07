@@ -50,7 +50,9 @@ Picks are tiered by win chance: Strong 75%+, Solid 65%+, Lean 57%+, otherwise To
 - **NFL 2023-2026 (917 games):** 63% winners. QB changes are worth about 2 points and rest about 0.2 per day, but Vegas prices them in: 47.8% ATS. Weather didn't help totals.
 - **College football 2023-2026 (2,669 games):** 73.7% winners with the stage-2 factors vs 71.5% without, every season better. ATS 50.9%.
 - **NBA 2025-26:** 69% winners over 1,213 games. No historical lines available to test ATS.
-- **MLB 2026:** 55% winners. Doesn't know starting pitchers, which is the biggest single-game factor.
+  Adjusting for missing rotation players (fitted on 2024-25) lifts that to 69.7% and cuts the margin miss
+  from ±11.54 to ±11.29. That test uses who actually sat, which a pregame report mostly but not always knows.
+- **MLB 2026:** 55.0% winners on team ratings alone, 55.4% with starting pitchers (effect fitted on 2025).
 
 Break-even at −110 odds is 52.4%. None of these clear it reliably. Use the model to research
 matchups and sanity-check lines, not as a betting system.
@@ -64,7 +66,9 @@ matchups and sanity-check lines, not as a betting system.
 - **College football player props:** same stats as NFL, from cfbfastR play-by-play names (QB, top 2 RBs, top 4 receivers).
 - **MLB batter props:** hits, total bases, home run, strikeouts, RBIs for each team's 9 most-used recent batters,
   named via the Chadwick Bureau register. Uses the latest MLB play-by-play available (it lags a few weeks).
-  No pitcher props: probable starters aren't in the free data.
+- **MLB pitcher props:** strikeouts for each probable starter = strikeouts per batter faced (recent starts,
+  shrunk toward league average) x usual batters faced x how often that lineup strikes out against starters.
+  Walk-forward on 2026: average miss 1.79 strikeouts vs. 1.82 for the pitcher's season average.
 
 Count stats (receptions, TDs thrown, rebounds, hits, total bases...) use Poisson / negative binomial
 distributions fitted from the backtest; yardage and points use a normal distribution.
@@ -87,7 +91,8 @@ scored against season-average lines, which are softer than real ones.
 ## Top 10 picks
 
 The 10 most confident winner picks across all sports for today only (Eastern time; fewer on light days),
-moved down a little when the picked team has a key player Out or Doubtful. The list is saved in the
+moved down a little when the picked team has a key player Out or Doubtful (not in the NBA, where the
+projection already accounts for it). The list is saved in the
 picks log, so the Top 10 has its own live record, plus a backtested record (the daily top 10 by win chance).
 
 ## Injuries (`injuries.py`)
@@ -95,7 +100,20 @@ picks log, so the Top 10 has its own live record, plus a backtested record (the 
 NFL and NBA injury reports, from ESPN's live injury page when it responds, otherwise the daily
 sportsdataverse feed. Players ruled out (Out, Doubtful, IR, suspended) are removed from player props;
 questionable / day-to-day players are tagged. Key players (anyone with a player prop, or NBA players
-averaging 20+ minutes) are called out on the pick. Injuries do not change projected scores.
+averaging 20+ minutes) are called out on the pick.
+
+NBA projections move when rotation players are ruled out (`nba.py`). Each player's value is his Game Score
+per minute above a deep-bench rate, times his usual minutes, scaled by how many of the team's last 10 games
+he played (the team ratings already reflect games he missed). Points lost by his team and gained by the
+opponent per unit of value are fitted on past games' residuals: last season for the reported test, both
+seasons for live picks. Questionable / day-to-day players aren't adjusted. NFL scores only adjust for starting-QB changes.
+
+## Starting pitchers (`mlb.py`)
+
+Starters come from the play-by-play (first pitcher each team used). Probable starters for upcoming games
+come from MLB's public stats API (`statsapi.mlb.com`). Each starter moves the projection by his recent
+strikeout, walk and home run rates (FIP-style weights) over his usual outing, at a rate fitted on the previous
+season. If the API is down, games use team ratings only and the Model screen says so.
 
 The GitHub workflow runs at 8 AM Eastern and then hourly from 10 AM to midnight Eastern so reports
 stay fresh into game time. Final inactives (NFL: 90 minutes before kickoff) can still land between runs.
@@ -123,12 +141,14 @@ Five screens from the tab bar at the bottom:
 
 Tap **+** on any pick or prop to add it to the **parlay slip**. The slip multiplies the leg chances,
 shows fair odds, and tells you whether your book's payout is worth it. It warns when legs come from the same game.
+Enter your bankroll to get a Kelly bet size (quarter Kelly by default, half and full selectable); it says to skip
+the bet when the payout doesn't beat the chance. Bankroll and fraction are saved on the device.
 
 ## Ideas to improve it
 
-- MLB: add starting pitcher ratings (pitcher_id is in the play-by-play).
+- MLB: bullpen strength and starter handedness vs. lineup.
 - NFL/CFB: QB injuries and rest days; weather for totals.
-- NBA: player availability (the biggest NBA factor). Back-to-backs are worth about 2.5 points but didn't improve accuracy in testing.
+- NBA: partial adjustment for questionable players. Back-to-backs are worth about 2.5 points but didn't improve accuracy in testing.
 - Compare against closing lines over several seasons before trusting any edge.
 
 ## Files
