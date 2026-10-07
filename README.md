@@ -111,6 +111,19 @@ Adds: best moneyline price and book per pick, the market's no-vig win chance, EV
 price, spreads/totals for NBA and MLB, real moneyline units for every sport, and closing line value
 (first logged price vs. the last price before the game). Player prop lines need a paid plan.
 
+## The dashboard
+
+Five screens from the tab bar at the bottom:
+
+- **Today** - the day's top picks across every sport, with their live and backtested record.
+- **Games** - every upcoming game for the chosen sport, sorted by confidence or date.
+- **Matchup** - the scoreboard projection for one game (or any two teams), its props, injuries and breakdown.
+- **P&L** - live and backtested results by rating, units over time, closing line value.
+- **Model** - power ratings and how the model tested.
+
+Tap **+** on any pick or prop to add it to the **parlay slip**. The slip multiplies the leg chances,
+shows fair odds, and tells you whether your book's payout is worth it. It warns when legs come from the same game.
+
 ## Ideas to improve it
 
 - MLB: add starting pitcher ratings (pitcher_id is in the play-by-play).
