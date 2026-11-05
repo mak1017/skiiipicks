@@ -82,6 +82,7 @@ def nfl_project(pg, as_of, cur_season):
     team_last = hist.groupby("team")["date"].max()
     form["active"] = form["last_date"].values == team_last.reindex(form["team"]).values
     opp = _opp_factors(hist[hist["season"] >= cur_season - 1], [v[0] for v in NFL_STATS.values()], cur_season, k=4)
+    form = _with_avg(form, hist, NFL_STATS, cur_season)
     return form, opp
 
 
@@ -114,9 +115,28 @@ def nfl_game_props(form, opp, team, opp_team, spreads):
                 cat, kind = NFL_STATS[st]
                 fac = float(opp[cat].get(opp_team, 1.0)) if cat in opp else 1.0
                 proj = float(r[st]) * fac
-                props[st] = {"proj": proj, "kind": kind, **spread_params(spreads, st, kind, proj)}
+                props[st] = {"proj": proj, "kind": kind, "avg": _avg(r, st), **spread_params(spreads, st, kind, proj)}
             out.append({"name": r["name"], "role": role, "props": props})
     return out
+
+
+def _with_avg(form, hist, stats, cur_season):
+    """Attach each player's current-season per-game average and game count (used to set book-style lines)."""
+    cur = hist[hist["season"] == cur_season]
+    if cur.empty:
+        return form
+    g = cur.groupby("pid")
+    avg = g[list(stats)].mean().add_prefix("avg_")
+    avg["avg_n"] = g.size()
+    return form.join(avg)
+
+
+def _avg(r, st):
+    v = r.get("avg_" + st) if hasattr(r, "get") else None
+    n = r.get("avg_n") if hasattr(r, "get") else None
+    if v is None or pd.isna(v) or n is None or pd.isna(n) or n < 6:
+        return None
+    return float(v)
 
 
 # ---------------- NBA ----------------
@@ -155,6 +175,7 @@ def nba_project(pg, as_of, cur_season):
     team_last = hist.groupby("team")["date"].max()
     form["active"] = form["last_date"].values == team_last.reindex(form["team"]).values
     opp = _opp_factors(hist[hist["season"] >= cur_season - 1], stats, cur_season, k=10)
+    form = _with_avg(form, hist, NBA_STATS, cur_season)
     return form, opp
 
 
@@ -166,7 +187,7 @@ def nba_game_props(form, opp, team, opp_team, spreads, min_minutes=18):
         for st, kind in NBA_STATS.items():
             fac = float(opp[st].get(opp_team, 1.0))
             proj = float(r[st + "_pm"] * r["minutes"]) * fac
-            props[st] = {"proj": proj, "kind": kind, **spread_params(spreads, st, kind, proj)}
+            props[st] = {"proj": proj, "kind": kind, "avg": _avg(r, st), **spread_params(spreads, st, kind, proj)}
         out.append({"name": r["name"], "role": f"{r['minutes']:.0f} min", "props": props})
     return out
 
@@ -367,6 +388,7 @@ def mlb_project(pg, as_of, cur_season):
     team_last = hist.groupby("team")["date"].max()
     form["active"] = form["last_date"].values == team_last.reindex(form["team"]).values
     opp = _opp_factors(hist[hist["season"] >= cur_season - 1], list(MLB_STATS), cur_season, k=25)
+    form = _with_avg(form, hist, MLB_STATS, cur_season)
     return form, opp
 
 
@@ -377,6 +399,6 @@ def mlb_game_props(form, opp, team, opp_team, spreads):
         props = {}
         for st, kind in MLB_STATS.items():
             proj = float(r[st + "_pp"] * r["pa"]) * float(opp[st].get(opp_team, 1.0))
-            props[st] = {"proj": proj, "kind": kind, **spread_params(spreads, st, kind, proj)}
+            props[st] = {"proj": proj, "kind": kind, "avg": _avg(r, st), **spread_params(spreads, st, kind, proj)}
         out.append({"name": r["name"], "role": f"about {r['pa']:.1f} plate appearances", "props": props})
     return out

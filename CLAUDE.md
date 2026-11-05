@@ -9,7 +9,9 @@ GitHub Actions rebuilds it every hour and publishes it to GitHub Pages.
 - `skiiipicks/build.py` - entry point. Runs every sport, writes `dashboard_data.json`. `--data-dir` uses local files.
 - `skiiipicks/core.py` - ridge-regression team ratings (offense/defense), walk-forward backtests, ATS scoring.
 - `skiiipicks/nfl.py`, `cfb.py`, `nba.py`, `mlb.py` - per-sport data loading, profiles, upcoming games.
-- `skiiipicks/stack.py` - stage-2 game-context model (rest, QB changes, Elo, talent, travel), pick tiers.
+- `skiiipicks/stack.py` - stage 2. NFL/CFB: ridge on context (rest, QB changes, Elo, talent, travel) plus a
+  market-aware ridge that adds the Vegas spread (win chance uses it; spread leans use the ratings-only margin).
+  NBA/MLB: `WinStack` logistic (NBA lineup strength vs usual, MLB both starting pitchers). Pick tiers.
 - `skiiipicks/props.py` - player props (NFL, CFB, NBA, MLB batters) with fitted spreads.
 - `skiiipicks/injuries.py` - ESPN live injury page with the sportsdataverse daily feed as fallback.
 - `skiiipicks/odds.py` - The Odds API (key in env var `ODDS_API_KEY`), cached in `odds_cache.json`.
@@ -46,4 +48,10 @@ For front-end work, only run the second command against the existing `dashboard_
 ## Model rules
 
 - Every reported accuracy number must be walk-forward (no peeking at the game being predicted).
+- Only keep a change if it improves walk-forward winners or Brier. Walk-forward results (Oct 2026): NFL 62.8% ratings
+  -> 67.3% with the spread (Vegas favorite 67.5%); CFB 72.9% (Brier .182 -> .175); NBA 68.7% -> 70.2% with
+  lineup strength; MLB 55.4% -> 56.7% with starting pitchers. MLB probables come from statsapi.mlb.com at build time.
+- Market use (Nov 2026): NBA/MLB win chance = log-odds blend, 0.2 ratings / 0.8 no-vig moneyline, when odds exist
+  (`build.MKT_W`). Projected totals use the Vegas total when known (model totals hit 48-49% vs the line).
+  Live log Oct 5-Nov 4: positive-EV moneyline "value" picks went 70-83, -25.5u, i.e. model-vs-market gaps were noise.
 - Don't claim an edge the backtest doesn't show; the dashboard copy states break-even (52.4% at -110) plainly.

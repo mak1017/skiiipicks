@@ -92,8 +92,11 @@ def make_fit(box, cur_season):
 
 
 def backtest(box, season):
+    """Walk-forward test of one season. Returns (empty frame, None) when it's too early in the season."""
     g = games_from_box(box)
     start = g.loc[g["season"] == season, "date"].min() + pd.Timedelta(days=14)
+    if pd.isna(start) or (g.loc[g["season"] == season, "date"] >= start).sum() < 30:
+        return pd.DataFrame(columns=list(g.columns) + ["pred_home", "pred_away"]), None
     bt = walk_forward(g, make_fit(box, season), start)
     bt = bt[bt["season"] == season]
     return bt, backtest_summary(bt, SIGMA)
@@ -199,3 +202,87 @@ def upcoming(sched_path, model, days=8):
                     "pred_home": ph, "pred_away": pa, "win_home": wp, "tier": tier(wp), "line_home": None,
                     "total_line": None, "cover_home": None, "notes": notes})
     return out
+
+
+# ---------------- lineup strength (who is actually playing) ----------------
+# Player value = recent game score (Hollinger), decayed. A team's lineup strength for a game is the sum of
+# its active players' values; the stage-2 feature is how far that sits from the team's own recent norm,
+# because the ratings already reflect whoever has been playing lately. Worth about 1 point of winners
+# in walk-forward testing (68.5% -> 70.0% on 2025-26).
+
+VAL_HL, BASE_HL = 15, 20
+
+
+def _player_games(pbox_paths):
+    pb = pd.concat([pd.read_parquet(p) for p in pbox_paths], ignore_index=True)
+    pb = pb[pb["season_type"].isin([2, 3]) & pb["team_abbreviation"].isin(NBA_TEAMS)].copy()
+    pb["date"] = pd.to_datetime(pb["game_date"])
+    n = lambda c: _num(pb[c]).fillna(0)
+    pb["min"] = n("minutes")
+    pb["gs"] = (n("points") + .4 * n("field_goals_made") - .7 * n("field_goals_attempted")
+                - .4 * (n("free_throws_attempted") - n("free_throws_made")) + .7 * n("offensive_rebounds")
+                + .3 * n("defensive_rebounds") + n("steals") + .7 * n("assists") + .7 * n("blocks")
+                - .4 * n("fouls") - n("turnovers"))
+    pb["played"] = (pb["min"] > 0) & ~pb["did_not_play"].fillna(False).astype(bool)
+    pb["game_id"] = pb["game_id"].astype(str)
+    pb = pb.sort_values(["athlete_id", "date"])
+    g = pb.groupby("athlete_id")
+    pb["gs_p"] = pb["gs"].where(pb["played"])
+    pb["val_pre"] = g["gs_p"].transform(lambda s: s.shift().ewm(halflife=VAL_HL, ignore_na=True).mean())
+    pb["val_post"] = g["gs_p"].transform(lambda s: s.ewm(halflife=VAL_HL, ignore_na=True).mean())
+    pb["n_pre"] = g["played"].cumsum() - pb["played"]
+    pb["v"] = pb["val_pre"].fillna(0).clip(lower=0) * (pb["n_pre"] >= 3)
+    return pb
+
+
+def lineup_table(pbox_paths):
+    """Per (game_id, team): lineup strength vs the team's recent norm, using only earlier games for the norm."""
+    pb = _player_games(pbox_paths)
+    t = pb.assign(hv=np.where(pb["played"], pb["v"], 0)).groupby(["game_id", "team_abbreviation"]).agg(
+        hv=("hv", "sum"), date=("date", "first")).reset_index().sort_values("date")
+    t["base"] = t.groupby("team_abbreviation")["hv"].transform(lambda s: s.shift().ewm(halflife=BASE_HL).mean())
+    t["shift"] = (t["hv"] - t["base"]).fillna(0)
+    return t.rename(columns={"team_abbreviation": "team"}), pb
+
+
+def add_lineup(df, table):
+    """df has game_id, home, away. Adds lineup_diff (home minus away)."""
+    t = table[["game_id", "team", "shift"]]
+    d = df.copy(); d["game_id"] = d["game_id"].astype(str)
+    d = d.merge(t.rename(columns={"team": "home", "shift": "h_shift"}), on=["game_id", "home"], how="left")
+    d = d.merge(t.rename(columns={"team": "away", "shift": "a_shift"}), on=["game_id", "away"], how="left")
+    d["lineup_diff"] = d["h_shift"].fillna(0) - d["a_shift"].fillna(0)
+    return d
+
+
+def lineup_upcoming(table, pb, ups, inj, today=None):
+    """Expected lineup strength for upcoming games: players who played for the team in the last 30 days,
+    minus anyone listed Out/Doubtful/Suspended. Adds lineup_diff and a readable note per game."""
+    from .injuries import match, RULED_OUT
+    today = pd.Timestamp(today or pd.Timestamp.today().normalize())
+    last = pb[pb["played"]].sort_values("date").groupby("athlete_id").tail(1)
+    last = last[last["date"] >= today - pd.Timedelta(days=30)]
+    pv = pb[pb["played"]].groupby("athlete_id")["val_post"].last()
+    npl = pb.groupby("athlete_id")["played"].sum()
+    base = table.sort_values("date").groupby("team").apply(
+        lambda x: x["hv"].ewm(halflife=BASE_HL).mean().iloc[-1])
+    out_names = {}
+    for u in ups:
+        sh = {}
+        for side in ("home", "away"):
+            team = u[side]
+            roster = last[last["team_abbreviation"] == team]
+            tot, missing = 0.0, []
+            for _, r in roster.iterrows():
+                v = max(float(pv.get(r["athlete_id"], 0) or 0), 0) if npl.get(r["athlete_id"], 0) >= 3 else 0
+                row = match(r["athlete_display_name"], team, inj) if inj is not None and len(inj) else None
+                if row is not None and row["status"] in RULED_OUT:
+                    if v >= 8: missing.append(r["athlete_display_name"])
+                    continue
+                tot += v
+            sh[side] = tot - float(base.get(team, tot))
+            out_names[(u["date"], team)] = missing
+        u["lineup_diff"] = sh["home"] - sh["away"]
+        u["lineup_shift"] = {"home": sh["home"], "away": sh["away"]}
+        u["lineup_out"] = {s_: out_names.get((u["date"], u[s_]), []) for s_ in ("home", "away")}
+    return ups

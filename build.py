@@ -46,23 +46,94 @@ def ratings_block(model):
 
 
 def finish_upcoming(up, st, notes_fn):
-    """Apply the stage-2 model to upcoming games and attach pick info."""
+    """Apply the stage-2 model to upcoming games and attach pick info.
+
+    Win chance and projected score use the market-aware model when a spread is known; the spread
+    lean (cover_home) uses the ratings-only margin, which is the part that can disagree with Vegas.
+    """
     up = up.copy()
-    margin = st.predict(up)
+    model_m = st.predict(up)
+    mm, sig = st.predict_mkt(up)
     tot = up["pred_home"] + up["pred_away"]
-    up["pred_home"], up["pred_away"] = tot / 2 + margin / 2, tot / 2 - margin / 2
-    up["win_home"] = [win_prob(m, st.sigma) for m in margin]
+    up["pred_home"], up["pred_away"] = tot / 2 + mm / 2, tot / 2 - mm / 2
+    up["model_margin"] = model_m
+    up["win_home"] = [win_prob(m, s_) for m, s_ in zip(mm, sig)]
+    up["mkt_used"] = pd.to_numeric(up["line_home"], errors="coerce").notna() & (st.mk is not None)
     up["tier"] = [stack.tier(p) for p in up["win_home"]]
     covers = []
-    for m, line in zip(margin, up["line_home"]):
+    for m, line in zip(model_m, up["line_home"]):
         if line is None or pd.isna(line):
             covers.append(None); continue
         covers.append(st.p_cover_home(m - line))
     up["cover_home"] = covers
     up["notes"] = [notes_fn(r) for _, r in up.iterrows()]
+    up["_x"] = [{k: r.get(k) for k in st.X} for _, r in up.iterrows()]
     keep = ["date", "week", "home", "away", "neutral", "pred_home", "pred_away", "win_home", "tier",
-            "line_home", "total_line", "cover_home", "notes", "series"]
-    return up[[c for c in keep if c in up.columns]]
+            "line_home", "total_line", "cover_home", "notes", "series", "model_margin", "mkt_used", "_x"]
+    up = up[[c for c in keep if c in up.columns]].copy()
+    for c in ("line_home", "total_line", "cover_home"):  # NaN -> None so the odds feed can fill gaps
+        if c in up:
+            up[c] = up[c].astype(object).where(up[c].notna(), None)
+    return up
+
+
+MKT_W = 0.2  # weight on the model when blending with the moneyline market (NBA, MLB); see blend_moneyline
+
+
+def _logit(p):
+    p = min(max(float(p), 1e-4), 1 - 1e-4)
+    return math.log(p / (1 - p))
+
+
+def blend_moneyline(ups):
+    """NBA/MLB have no historical lines to train a market-aware model, so when today's no-vig moneyline is
+    known, blend in log-odds with most weight on the market. In football the trained market-aware model
+    gives the ratings almost no weight once the spread is known, and on this NBA season's first 105 games
+    the market picked 66.7% of winners vs 63.8% for the model (Brier 0.201 vs 0.236), with the blend at
+    0.2 model weight scoring 0.206."""
+    n = 0
+    for u in ups:
+        mh = (u.get("market") or {}).get("mkt_home")
+        if mh is None or u.get("mkt_used"):
+            continue
+        u["model_win_home"] = u["win_home"]
+        u["win_home"] = 1 / (1 + math.exp(-(MKT_W * _logit(u["win_home"]) + (1 - MKT_W) * _logit(mh))))
+        u["tier"] = stack.tier(u["win_home"])
+        u["mkt_used"], u["mkt_kind"] = True, "moneyline"
+        n += 1
+    return n
+
+
+def anchor_totals(ups):
+    """Projected total = the Vegas total when there is one. In NFL and college backtests the line missed by
+    less than the model every season, and model total edges went 48-49% against it (worse on big edges)."""
+    for u in ups:
+        tl = u.get("total_line")
+        if tl is None or pd.isna(tl):
+            continue
+        m = u["pred_home"] - u["pred_away"]
+        u["model_total"] = u["pred_home"] + u["pred_away"]
+        u["pred_home"], u["pred_away"] = float(tl) / 2 + m / 2, float(tl) / 2 - m / 2
+
+
+def rescore_with_market(ups, st):
+    """Games whose spread only arrived from the odds feed: redo win chance with the market-aware model."""
+    n = 0
+    for u in ups:
+        x = u.pop("_x", None)
+        if x is None or u.get("mkt_used") or u.get("line_home") is None or pd.isna(u.get("line_home")) or st is None or st.mk is None:
+            continue
+        df = pd.DataFrame([{**x, "line_home": float(u["line_home"])}])
+        mm, sig = st.predict_mkt(df)
+        tot = u["pred_home"] + u["pred_away"]
+        u["pred_home"], u["pred_away"] = tot / 2 + mm[0] / 2, tot / 2 - mm[0] / 2
+        u["win_home"] = win_prob(float(mm[0]), float(sig[0]))
+        u["tier"] = stack.tier(u["win_home"])
+        u["mkt_used"] = True
+        if u.get("model_margin") is not None:
+            u["cover_home"] = st.p_cover_home(u["model_margin"] - float(u["line_home"]))
+        n += 1
+    return n
 
 
 def nfl_notes(r):
@@ -150,12 +221,13 @@ def hist_rows(sport, h, st, mlk):
     if h.empty:
         return []
     m = st.predict(h)
+    wps = st.win_prob(h)
     rows = []
-    for (_, r), mg in zip(h.iterrows(), m):
+    for (_, r), mg, wp in zip(h.iterrows(), m, wps):
         d = pd.Timestamp(r["date"]).strftime("%Y-%m-%d")
         line = r.get("line_home")
         cov = st.p_cover_home(mg - line) if line is not None and not pd.isna(line) else None
-        rows.append(pnl.make_row("backtest", sport, d, r["home"], r["away"], win_prob(mg, st.sigma), line, cov,
+        rows.append(pnl.make_row("backtest", sport, d, r["home"], r["away"], float(wp), line, cov,
                                  mlk.get((d, r["home"], r["away"]))))
     return rows
 
@@ -163,6 +235,12 @@ def hist_rows(sport, h, st, mlk):
 def simple_rows(sport, bt, sigma):
     return [pnl.make_row("backtest", sport, pd.Timestamp(r["date"]).strftime("%Y-%m-%d"), r["home"], r["away"],
                          win_prob(r["pred_home"] - r["pred_away"], sigma)) for _, r in bt.iterrows()]
+
+
+def pred_rows(sport, preds):
+    """Backtest rows from walk-forward stage-2 probabilities (NBA, MLB)."""
+    return [pnl.make_row("backtest", sport, pd.Timestamp(r["date"]).strftime("%Y-%m-%d"), r["home"], r["away"], float(r["wp"]))
+            for _, r in preds.iterrows()]
 
 
 def nba_key_players(src, season):
@@ -240,6 +318,7 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
            "built_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     LIVE, BACK, RES = [], [], []
     NAMES = {}  # per sport: how to recognise team names in the odds feed
+    STK, MLK = {}, {}  # stage-2 models (for re-scoring once odds arrive) and nflverse moneylines
 
     # ---------------- NFL ----------------
     for season_nfl in (season_nfl, season_nfl - 1):
@@ -275,9 +354,8 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
             raw = pd.read_csv(src("nfl_games"))
             mlk = {(str(r.gameday)[:10], r.home_team, r.away_team): {"home": r.home_moneyline, "away": r.away_moneyline}
                    for r in raw.itertuples() if r.season >= season_nfl - 1}
-            for u in up_recs:
-                LIVE.append(pnl.make_row("live", "nfl", u["date"], u["home"], u["away"], u["win_home"],
-                                         u.get("line_home"), u.get("cover_home"), mlk.get((u["date"], u["home"], u["away"]))))
+            MLK["nfl"] = mlk
+            STK["nfl"] = st
             st_prev = stack.Stack(stack.NFL_X).fit(hist[hist["season"] < season_nfl])
             BACK += hist_rows("nfl", hist[hist["season"] == season_nfl], st_prev, mlk)
             RES.append(result_rows("nfl", games))
@@ -338,9 +416,7 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
                 cup = finish_upcoming(cup, cst, cfb_notes)
             cup_recs = cup.to_dict("records") if not cup.empty else []
             cfb_props_summary = add_cfb_props(src, cpbp, nmap, cup_recs, season_cfb)
-            for u in cup_recs:
-                LIVE.append(pnl.make_row("live", "cfb", u["date"], u["home"], u["away"], u["win_home"],
-                                         u.get("line_home"), u.get("cover_home")))
+            STK["cfb"] = cst
             out["cfb"] = {"label": "College football", "season": season_cfb, "unit": "pts", "teams": cteams,
                           "model": {k: ({t: v for t, v in d.items() if t in fbs} if isinstance(d, dict) else d)
                                     for k, d in ratings_block(cmodel.pts).items()},
@@ -360,32 +436,64 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
     for season_nba in (season_nba, season_nba - 1):
         try:
             print("NBA...")
+            yrs = [season_nba - 2, season_nba - 1, season_nba]
             try:
-                box = nba.load_box({season_nba - 1: src("nba_box", season_nba - 1), season_nba: src("nba_box", season_nba)})
+                box = nba.load_box({y: src("nba_box", y) for y in yrs})
             except Exception:  # new season's box scores not published yet: use the last full season
                 season_nba -= 1
-                box = nba.load_box({season_nba - 1: src("nba_box", season_nba - 1), season_nba: src("nba_box", season_nba)})
-            nbt, nsumm = nba.backtest(box, season_nba)
-            BACK += simple_rows("nba", nbt, nba.SIGMA)
+                yrs = [season_nba - 2, season_nba - 1, season_nba]
+                box = nba.load_box({y: src("nba_box", y) for y in yrs})
+            parts, nsumm = [], {}
+            for y in yrs:
+                bt, sm = nba.backtest(box[box["season"] <= y], y)
+                if sm:
+                    parts.append(bt); nsumm[y] = sm
+            nhist = pd.concat(parts, ignore_index=True)
+            try:
+                ltab, npb = nba.lineup_table([src("nba_pbox", y) for y in yrs])
+                nhist = nba.add_lineup(nhist, ltab); NX = stack.NBA_X
+            except Exception as e:
+                print("NBA lineup data unavailable:", repr(e)[:200]); ltab = npb = None; NX = ["pm"]
+            nhist["pm"] = nhist["pred_home"] - nhist["pred_away"]
+            nhist["am"] = nhist["home_pts"] - nhist["away_pts"]
+            nseasons, npreds = stack.win_eval(nhist, NX, yrs[1:], nba.SIGMA, freq="M")
+            nws = stack.WinStack(NX).fit(nhist)
+            last_s = max(nsumm)
+            BACK += pred_rows("nba", npreds[npreds["season"] == last_s])
             RES.append(result_rows("nba", nba.games_from_box(box)))
             nmodel = nba.make_fit(box, season_nba)(pd.Timestamp.today())
             qp = nba.quarter_points(src("nba_sched", season_nba))
-            nteams = nba.team_profiles(box, nmodel, season_nba, qp)
+            nteams = nba.team_profiles(box, nmodel, season_nba if (box["season"] == season_nba).sum() >= 60 else season_nba - 1, qp)
             add_ranks(nteams, {"off_rating": True, "def_rating": True, "net_rating": True, "ortg": True,
                                "drtg": False, "pace": True})
             nba_ups = nba_upcoming(src, nmodel, season_nba)
             nba_props_summary, nba_props_note = add_nba_props(src, nba_ups, season_nba)
-            LIVE += [pnl.make_row("live", "nba", u["date"], u["home"], u["away"], u["win_home"]) for u in nba_ups]
             nba_map = {r.team_display_name: r.team for r in box.drop_duplicates("team").itertuples()}
             NAMES["nba"] = {v: k for k, v in nba_map.items()}
-            binj, binfo = injuries.get("nba", src("nba_inj", season_nba + 1), nba_map)
+            binj, binfo = injuries.get("nba", src("nba_inj", season_nba + 1 if season_nba < current_seasons()["season_nba"] else season_nba), nba_map)
+            if nba_ups:
+                if ltab is not None:
+                    nba.lineup_upcoming(ltab, npb, nba_ups, binj)
+                for u in nba_ups:
+                    u["pm"] = u["pred_home"] - u["pred_away"]
+                wps = nws.win_prob(pd.DataFrame(nba_ups).reindex(columns=NX))
+                for u, wp in zip(nba_ups, wps):
+                    u["win_home"] = float(wp); u["tier"] = stack.tier(wp)
+                    for side in ("home", "away"):
+                        sh = (u.get("lineup_shift") or {}).get(side, 0)
+                        miss = (u.get("lineup_out") or {}).get(side) or []
+                        if sh <= -8 and miss:
+                            u["notes"].append(f"{u[side]} lineup weaker than usual without {', '.join(miss[:3])}")
+                    u.pop("pm", None)
             injuries.attach(nba_ups, binj, "nba", nba_key_players(src, season_nba))
             out["nba"] = {"label": "NBA", "season": season_nba, "unit": "pts", "teams": nteams,
                           "model": {**ratings_block(nmodel.eff), "pace_mu": nmodel.pace.mu,
                                     "pace_off": nmodel.pace.off, "pace_dfn": nmodel.pace.dfn},
                           "sigma": nba.SIGMA, "upcoming": nba_ups, "props_summary": nba_props_summary,
-                          "props_note": nba_props_note, "injury_info": binfo, "prop_labels": props.NBA_LABELS, "total_sd": total_sd(nsumm),
-                          "backtest": {"current": {"season": season_nba, **nsumm}}}
+                          "props_note": nba_props_note, "injury_info": binfo, "prop_labels": props.NBA_LABELS,
+                          "total_sd": total_sd(nsumm[last_s]), "stack": nws.coefs(),
+                          "seasons": nseasons + ([stack.pooled(nseasons)] if len(nseasons) > 1 else []),
+                          "backtest": {"current": {"season": last_s, **nsumm[last_s]}}}
             break
         except Exception as e:  # season data not out yet, or a source is down
             print("NBA failed for season", season_nba, "-", repr(e)[:200])
@@ -395,15 +503,64 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
     for season_mlb in (season_mlb, season_mlb - 1):
         try:
             print("MLB...")
-            mg = mlb.load_games(src("mlb_sched", season_mlb))
-            mbt, msumm = mlb.backtest(mg, season_mlb)
-            BACK += simple_rows("mlb", mbt, mlb.SIGMA)
+            myrs = []
+            gl = []
+            for y in (season_mlb - 2, season_mlb - 1, season_mlb):
+                try:
+                    gl.append(mlb.load_games(src("mlb_sched", y))); myrs.append(y)
+                except Exception as e:
+                    if y == season_mlb:
+                        raise
+            mg_all = pd.concat(gl).drop_duplicates("game_pk").sort_values("date").reset_index(drop=True)
+            mg = mg_all[mg_all["season"] == season_mlb]
+            parts, msumms = [], {}
+            for y in myrs:
+                bt, sm = mlb.backtest(mg_all[mg_all["season"] <= y], y)
+                parts.append(bt[bt["season"] == y]); msumms[y] = sm
+            mhist = pd.concat(parts, ignore_index=True)
+            msumm = msumms[season_mlb]
+            pbps = {}
+            for y in myrs:
+                try:
+                    pbps[y] = pd.read_parquet(src("mlb_pbp", y))
+                except Exception as e:
+                    print("MLB pbp missing", y, repr(e)[:120])
+            mpbp = pbps[season_mlb]
+            sp_tab, sp_cur = mlb.starters(pd.concat(pbps.values(), ignore_index=True), mg_all)
+            mhist = mlb.sp_features(mhist.merge(sp_tab, on="game_pk", how="left"))
+            mhist["pm"] = mhist["pred_home"] - mhist["pred_away"]
+            mhist["am"] = mhist["home_pts"] - mhist["away_pts"]
+            mseasons, mpreds = stack.win_eval(mhist, stack.MLB_X, myrs[1:], mlb.SIGMA)
+            mws = stack.WinStack(stack.MLB_X).fit(mhist)
+            BACK += pred_rows("mlb", mpreds[mpreds["season"] == season_mlb])
             RES.append(result_rows("mlb", mg))
 
-            mmodel = mlb.make_fit(mg, season_mlb)(pd.Timestamp.today() + pd.Timedelta(days=1))
+            mmodel = mlb.make_fit(mg_all, season_mlb)(pd.Timestamp.today() + pd.Timedelta(days=1))
             mups = mlb.upcoming(mg, mmodel)
-            LIVE += [pnl.make_row("live", "mlb", u["date"], u["home"], u["away"], u["win_home"]) for u in mups]
-            mpbp = pd.read_parquet(src("mlb_pbp", season_mlb))
+            if mups:
+                try:
+                    probs = mlb.fetch_probables(min(u["date"] for u in mups), max(u["date"] for u in mups))
+                except Exception as e:
+                    print("MLB probables unavailable:", repr(e)[:120]); probs = {}
+                pr = {}
+                for u in mups:
+                    e = probs.get(u["game_pk"], {})
+                    u["starters"] = {}
+                    for side, k in (("home", "h_"), ("away", "a_")):
+                        if side in e:
+                            pid, nm = e[side]
+                            u["starters"][side] = nm
+                            if pid in sp_cur.index:
+                                for c in ("woba", "fip", "depth"):
+                                    u[k + c] = float(sp_cur.loc[pid, c])
+                    u["pm"] = u["pred_home"] - u["pred_away"]
+                    hs, as_ = u["starters"].get("home"), u["starters"].get("away")
+                    u["notes"] = [f"Starters: {as_ or 'TBA'} ({u['away']}) vs {hs or 'TBA'} ({u['home']})"]
+                udf = mlb.sp_features(pd.DataFrame(mups).reindex(columns=["pm"] + [p_ + c for p_ in ("h_", "a_") for c in ("woba", "fip", "depth")]))
+                for u, wp in zip(mups, mws.win_prob(udf)):
+                    u["win_home"] = float(wp); u["tier"] = stack.tier(wp)
+                    for c in ["pm"] + [p_ + c for p_ in ("h_", "a_") for c in ("woba", "fip", "depth")]:
+                        u.pop(c, None)
             NAMES["mlb"] = {v: k for k, v in mlb.TEAM_ABBR.items()}
             prof = mlb.inning_profile(mpbp, mg)
             mteams = mlb.team_profiles(mg, mmodel, prof, season_mlb)
@@ -411,6 +568,7 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
             out["mlb"] = {"label": "MLB", "season": season_mlb, "unit": "runs", "teams": mteams,
                           "props_summary": add_mlb_props(src, mpbp, mg, mups, season_mlb), "prop_labels": props.MLB_LABELS,
                           "model": ratings_block(mmodel), "sigma": mlb.SIGMA, "total_sd": total_sd(msumm), "upcoming": mups,
+                          "stack": mws.coefs(), "seasons": mseasons + ([stack.pooled(mseasons)] if len(mseasons) > 1 else []),
                           "backtest": {"current": {"season": season_mlb, **msumm}}}
             break
         except Exception as e:  # season data not out yet, or a source is down
@@ -427,7 +585,19 @@ def run(src, season_nfl=2026, season_cfb=2026, season_nba=2026, season_mlb=2026,
     for sp in ("nfl", "cfb", "nba", "mlb"):
         if sp in NAMES and out.get(sp):
             ostatus["matched"][sp] = odds.attach(out[sp]["upcoming"], sp, cache, odds.make_matcher(sp, NAMES[sp]))
+            # spreads that only came from the odds feed: re-score with the market-aware model, then reprice
+            changed = rescore_with_market(out[sp]["upcoming"], STK.get(sp))
+            if sp in ("nba", "mlb"):
+                changed += blend_moneyline(out[sp]["upcoming"])
+            if changed:
+                odds.attach(out[sp]["upcoming"], sp, cache, odds.make_matcher(sp, NAMES[sp]))
+            anchor_totals(out[sp]["upcoming"])
     out["odds_status"] = ostatus
+    for sp in ("nfl", "cfb", "nba", "mlb"):
+        for u in (out.get(sp) or {}).get("upcoming", []):
+            u.pop("_x", None)
+            LIVE.append(pnl.make_row("live", sp, u["date"], u["home"], u["away"], u["win_home"], u.get("line_home"),
+                                     u.get("cover_home"), MLK.get(sp, {}).get((u["date"], u["home"], u["away"]))))
     mk = {(sp, u["date"], u["home"], u["away"]): u.get("market") for sp in ("nfl", "cfb", "nba", "mlb")
           for u in (out.get(sp) or {}).get("upcoming", [])}
     for r in LIVE:

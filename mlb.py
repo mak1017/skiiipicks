@@ -1,7 +1,8 @@
-"""MLB: opponent-adjusted runs model + inning-by-inning scoring profile.
+"""MLB: opponent-adjusted runs model + starting pitchers + inning-by-inning scoring profile.
 
-Limitation: starting pitchers drive a large share of single-game outcomes and
-this model rates teams, not that day's starter. Check probables before using it.
+Stage 1 rates teams on runs. Stage 2 (stack.WinStack) adds both starting pitchers, rated from every
+plate appearance they've faced before that day (wOBA allowed and FIP per batter, shrunk toward league
+average, scaled by how deep they usually go). Upcoming starters come from MLB's probable pitchers.
 """
 import numpy as np
 import pandas as pd
@@ -11,7 +12,10 @@ from .core import fit_ratings, team_game_rows, walk_forward, backtest_summary, w
 SCHED_URL = "https://raw.githubusercontent.com/sportsdataverse/baseballr-data/main/mlb/schedule/{}.parquet"
 PBP_URL = "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/mlb_pbp/mlb_pbp_{}.parquet"
 
-PARAMS = dict(alpha=25.0, half_life_days=120, prior_weight=0.3)
+PARAMS = dict(alpha=25.0, half_life_days=365, prior_weight=0.6)  # longer memory tested better (2025-26)
+PROBABLES_URL = "https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate={}&endDate={}&hydrate=probablePitcher"
+SP_SHRINK = 250   # batters faced of league-average performance added to every pitcher
+LW = {"walk": .69, "intent_walk": .69, "hit_by_pitch": .72, "single": .89, "double": 1.27, "triple": 1.62, "home_run": 2.1}
 SIGMA = 4.3
 TEAM_ABBR = {
     "Arizona Diamondbacks": "ARI", "Athletics": "ATH", "Atlanta Braves": "ATL", "Baltimore Orioles": "BAL",
@@ -117,7 +121,82 @@ def upcoming(games, ratings):
     res = []
     for _, g in fut.iterrows():
         ph, pa = ratings.predict(g["home"], g["away"])
-        res.append({"date": g["date"].strftime("%Y-%m-%d"), "home": g["home"], "away": g["away"],
+        res.append({"game_pk": int(g["game_pk"]), "date": g["date"].strftime("%Y-%m-%d"), "home": g["home"], "away": g["away"],
                     "series": g.get("series"), "pred_home": ph, "pred_away": pa,
                     "win_home": win_prob(ph - pa, SIGMA), "line_home": None, "total_line": None})
     return res
+
+
+# ---------------- starting pitchers ----------------
+
+def _pa(pbp, games):
+    p = pbp.merge(games[["game_pk", "date"]], on="game_pk")
+    ev = p["event_type"].fillna("")
+    p = p[ev != ""].copy(); ev = p["event_type"]
+    p["w"] = ev.map(LW).fillna(0.0)
+    p["k"] = ev.str.contains("strikeout").astype(float)
+    p["bb"] = ev.isin(["walk", "intent_walk", "hit_by_pitch"]).astype(float)
+    p["hr"] = ev.eq("home_run").astype(float)
+    p["pa"] = 1.0
+    return p
+
+
+def _rate(c, lg, n0=SP_SHRINK):
+    fip_lg = 13 * lg["hr"] + 3 * lg["bb"] - 2 * lg["k"]
+    woba = (c["w"] + n0 * lg["w"]) / (c["pa"] + n0) - lg["w"]
+    fip = ((13 * c["hr"] + 3 * c["bb"] - 2 * c["k"]) + n0 * fip_lg) / (c["pa"] + n0) - fip_lg
+    depth = (c["spa"] + 22 * 3) / (c["starts"] + 3)   # batters faced per start, shrunk toward 22
+    return woba, fip, depth
+
+
+def starters(pbp, games):
+    """Returns (per-game starter table with pre-game ratings, current rating per pitcher)."""
+    p = _pa(pbp, games)
+    first = p[p["inning"] == 1].sort_values("at_bat_index").groupby(["game_pk", "half_inning"])["pitcher_id"].first().unstack()
+    st = pd.DataFrame({"game_pk": first.index, "home_sp": first.get("top"), "away_sp": first.get("bottom")}).reset_index(drop=True)
+    pg = p.groupby(["pitcher_id", "game_pk", "date"])[["w", "k", "bb", "hr", "pa"]].sum().reset_index()
+    starts = pd.concat([st[["game_pk", "home_sp"]].rename(columns={"home_sp": "pitcher_id"}),
+                        st[["game_pk", "away_sp"]].rename(columns={"away_sp": "pitcher_id"})]).assign(start=1.0)
+    pg = pg.merge(starts, on=["game_pk", "pitcher_id"], how="left").fillna({"start": 0.0})
+    pg["spa"] = pg["pa"] * pg["start"]
+    pg = pg.sort_values(["pitcher_id", "date", "game_pk"])
+    lg = p[["w", "k", "bb", "hr"]].mean()
+    cum = pg.groupby("pitcher_id")[["w", "k", "bb", "hr", "pa", "start", "spa"]].cumsum()
+    pre = (cum - pg[["w", "k", "bb", "hr", "pa", "start", "spa"]]).rename(columns={"start": "starts"})
+    pg["woba"], pg["fip"], pg["depth"] = _rate(pre, lg)
+    tot = pg.groupby("pitcher_id")[["w", "k", "bb", "hr", "pa", "start", "spa"]].sum().rename(columns={"start": "starts"})
+    cur = pd.DataFrame(dict(zip(["woba", "fip", "depth"], _rate(tot, lg))))
+    cur["bf"] = tot["pa"]; cur["starts"] = tot["starts"]
+    key = pg[["pitcher_id", "game_pk", "woba", "fip", "depth"]]
+    st = st.merge(key.rename(columns={"pitcher_id": "home_sp", **{c: "h_" + c for c in ("woba", "fip", "depth")}}),
+                  on=["game_pk", "home_sp"], how="left")
+    st = st.merge(key.rename(columns={"pitcher_id": "away_sp", **{c: "a_" + c for c in ("woba", "fip", "depth")}}),
+                  on=["game_pk", "away_sp"], how="left")
+    return st, cur
+
+
+def sp_features(df):
+    """df has h_/a_ woba, fip, depth. Positive = home starter better, weighted by expected innings."""
+    out = df.copy()
+    for c in ("woba", "fip"):
+        out["sp_" + c] = (out["a_" + c].fillna(0) * out["a_depth"].fillna(22)
+                          - out["h_" + c].fillna(0) * out["h_depth"].fillna(22)) / 22
+    return out
+
+
+def fetch_probables(start, end, timeout=15):
+    """{game_pk: {"home": (id, name), "away": (id, name)}} from MLB's public schedule API."""
+    import json, urllib.request
+    req = urllib.request.Request(PROBABLES_URL.format(start, end), headers={"User-Agent": "Mozilla/5.0 skiiipicks"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        js = json.loads(r.read().decode("utf-8"))
+    out = {}
+    for d in js.get("dates", []) or []:
+        for g in d.get("games", []) or []:
+            e = {}
+            for side in ("home", "away"):
+                pp = ((g.get("teams") or {}).get(side) or {}).get("probablePitcher") or {}
+                if pp.get("id"):
+                    e[side] = (int(pp["id"]), pp.get("fullName"))
+            out[int(g["gamePk"])] = e
+    return out

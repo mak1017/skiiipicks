@@ -92,6 +92,8 @@ details.how > div{padding:0 0 14px;display:grid;gap:8px;font-size:.9rem;color:va
 .t10 .pc{font-family:var(--cond);font-weight:700;font-size:1.25rem;font-variant-numeric:tabular-nums}
 .t10 .mt{grid-column:2/4;font-size:.82rem;color:var(--muted)}
 .t10 .empty{border:0;border-radius:0}
+.h-sub{margin-top:18px}
+td .mu{color:var(--muted);font-size:.8em}
 
 /* add-to-slip button */
 .add{display:grid;place-items:center;width:36px;height:36px;margin:auto;border-radius:50%;border:1.5px solid var(--line);background:var(--surface);
@@ -283,6 +285,11 @@ tbody tr:last-child td{border-bottom:none}
     <ol class="t10" id="t10"></ol>
     <p class="sub" id="t10S"></p>
     <p class="sub" id="t10R"></p>
+    <div id="tpWrap" hidden>
+      <h1 id="tpH" class="h-sub">Top player props today</h1>
+      <ol class="t10" id="tprops"></ol>
+      <p class="sub" id="tpS"></p>
+    </div>
     <details class="how"><summary>How the colors work</summary><div>
       <p class="legend"><span><span class="dot r-green"></span>Green: 70%+ to win</span><span><span class="dot r-yellow"></span>Yellow: 58 to 70%</span><span><span class="dot r-red"></span>Red: close to a coin flip</span></p>
       <p>Spread leans and props use their own scale: green is 56%+ (props 58%+), yellow clears the 52.4% break-even at -110, red is below it.</p>
@@ -507,12 +514,14 @@ function renderBoard(){
   else { $("xlbl").textContent="Typical miss"; $("xval").textContent = "±"+(d.backtest.current.margin_mae||d.sigma).toFixed(1); }
   const g = (d.upcoming||[]).find(x=>x.home===S.home && x.away===S.away);
   if (g && g.line_home != null){
-    const edge = m - g.line_home, vf = g.line_home>=0?S.home:S.away;
+    const edge = (g.model_margin!=null?g.model_margin:m) - g.line_home, vf = g.line_home>=0?S.home:S.away;
     const side = edge>=0?S.home:S.away;
     let txt = `Vegas: ${vf} -${Math.abs(g.line_home).toFixed(1)}`;
     if (g.total_line) txt += `, total ${g.total_line}`;
     if (g.market) txt += `. Best moneyline: ${S.away} ${am(g.market.ml_best.away)} (${g.market.ml_best.away_book}), ${S.home} ${am(g.market.ml_best.home)} (${g.market.ml_best.home_book})`;
-    txt += Math.abs(edge) < 1 ? `. The model agrees with Vegas within a point.` : `. The model is ${Math.abs(edge).toFixed(1)} ${sp==="mlb"?"runs":"pts"} more bullish on ${side} than Vegas.`;
+    txt += Math.abs(edge) < 1 ? `. The ratings agree with Vegas within a point.` : `. The ratings alone are ${Math.abs(edge).toFixed(1)} ${sp==="mlb"?"runs":"pts"} more bullish on ${side} than Vegas.`;
+    if (g.mkt_used) txt += g.mkt_kind==="moneyline" ? ` The win chance above leans mostly on the market's moneyline, which has been more accurate than the ratings.` : ` The win chance and score above blend the ratings with this line, which tested more accurate than either alone.`;
+    if (g.model_total!=null) txt += ` Projected total uses the Vegas number (ratings alone said ${g.model_total.toFixed(1)}); the line beat the model on totals every season tested.`;
     $("vegas").innerHTML = `<div class="vegas">${esc(txt)}</div>`;
   } else $("vegas").innerHTML = "";
   $("asof").textContent = `Updated ${D.built_at?new Date(D.built_at).toLocaleString([], {weekday:"short",hour:"numeric",minute:"2-digit"}):D.built}`;
@@ -580,7 +589,7 @@ function renderWhere(){
     out.push(bars(`${S.away} offense vs ${S.home} defense, by quarter`, q, a.q_for, h.q_against, `${S.away} scores`, `${S.home} allows`));
     out.push(bars(`${S.home} offense vs ${S.away} defense, by quarter`, q, h.q_for, a.q_against, `${S.home} scores`, `${S.away} allows`));
   } else {
-    $("whereS").textContent="Average runs per game in each part of the game. Starting pitchers aren't in this model, so check probables before leaning on early-inning numbers.";
+    $("whereS").textContent="Average runs per game in each part of the game, by team. The win chance accounts for the probable starters; these splits don't.";
     const k=["1-3","4-6","7-9"], v=(o,f)=>k.map(x=>(o[f]&&o[f][x])||0);
     out.push(bars(`${S.away} bats vs ${S.home} pitching, by inning`, ["Inn 1-3","Inn 4-6","Inn 7-9"], v(a,"inn_for"), v(h,"inn_against"), `${S.away} scores`, `${S.home} allows`));
     out.push(bars(`${S.home} bats vs ${S.away} pitching, by inning`, ["Inn 1-3","Inn 4-6","Inn 7-9"], v(h,"inn_for"), v(a,"inn_against"), `${S.home} scores`, `${S.away} allows`));
@@ -651,8 +660,12 @@ function why(sp, g, max){
   // 5. honest caveats
   const conf=Math.max(g.win_home,1-g.win_home);
   if (conf<0.58) minus.push("Close to a coin flip, so treat it as a lean.");
-  if (sp==="mlb") minus.push("Doesn't know today's starting pitchers.");
+  if (sp==="mlb" && !(g.starters&&g.starters.home&&g.starters.away)) minus.push("Probable starters not posted yet, so the pick uses team ratings only.");
+  if (g.mkt_used && g.mkt_kind==="moneyline"){ const mk=g.market&&g.market.mkt_home; info.push(`Blended with the betting market (${pickHome?g.home:g.away} ${mk!=null?Math.round((pickHome?mk:1-mk)*100)+"%":""}); the ratings alone said ${Math.round((pickHome?g.model_win_home:1-g.model_win_home)*100)}%. The market has been more accurate this season.`); }
+  else if (g.mkt_used && g.line_home!=null){ const vf=g.line_home>=0?g.home:g.away; info.push(`Blended with the Vegas line (${vf} -${Math.abs(g.line_home).toFixed(1)}), which made winner picks more accurate in testing.`); }
   if (sp==="nba" && D.nba.props_note) minus.push("Uses last season's ratings; check offseason roster moves.");
+  if (sp==="nba" && g.lineup_shift){ const s=g.lineup_shift[pickHome?"home":"away"], o=g.lineup_shift[pickHome?"away":"home"];
+    if (o<=-8) plus.push(`${O} is missing more of its usual lineup than normal.`); else if (s<=-8) minus.push(`${P} is missing more of its usual lineup than normal.`); }
   const L=[...plus.map(t=>["plus",t]), ...minus.map(t=>["minus",t]), ...info.map(t=>["info",t])];
   return L.slice(0, max||5);
 }
@@ -707,7 +720,7 @@ function countCdf(n, mu, phi){ // P(X <= n): Poisson when phi ~ 1, otherwise neg
   for(let k=0;k<=n;k++){tot+=pm; pm*=(k+r)/(k+1)*(1-q);} return Math.min(tot,1);
 }
 function defLine(x){ return Math.floor(x)+0.5; }
-function prow(label, sublabel, proj, sd, dec, kind, tdword, phiArg, who){
+function prow(label, sublabel, proj, sd, dec, kind, tdword, phiArg, who, avg){
   const id="p"+Math.random().toString(36).slice(2,8);
   const base=(who?who+" ":"")+label, legId=`prop|${S.sport}|${S.away}@${S.home}|${base}`;
   if (kind==="td"){
@@ -716,7 +729,7 @@ function prow(label, sublabel, proj, sd, dec, kind, tdword, phiArg, who){
       <button class="add sm" data-leg="${esc(legId)}" data-td="${p}" data-base="${esc((who||label)+" "+word)}" aria-label="Add ${esc(base)} to slip" aria-pressed="false">+</button></div>`;
   }
   return `<div class="prow"><div class="pl"><b>${esc(label)}</b>${esc(sublabel)} ${proj.toFixed(dec)}</div>
-    <input inputmode="decimal" aria-label="${esc(base)} line" value="${defLine(proj)}" data-proj="${proj}" data-sd="${sd}" data-o="${id}" data-kind="${kind||"cont"}" data-phi="${phiArg||""}">
+    <input inputmode="decimal" aria-label="${esc(base)} line" value="${defLine(avg!=null?avg:proj)}" data-proj="${proj}" data-sd="${sd}" data-o="${id}" data-kind="${kind||"cont"}" data-phi="${phiArg||""}">
     <div class="po" id="${id}"></div>
     <button class="add sm" data-leg="${esc(legId)}" data-base="${esc(base)}" aria-label="Add ${esc(base)} to slip" aria-pressed="false">+</button></div>`;
 }
@@ -764,7 +777,7 @@ function renderProps(){
       const f5=(A.f5_for+H.f5_against)/2+(H.f5_for+A.f5_against)/2;
       h+=`<div class="pgroup"><h3>Early innings</h3><div class="prow"><div class="pl"><b>Run in the 1st inning</b>Either team scores</div><div></div><div class="po"><b>${(yr*100).toFixed(0)}%</b> yes<br>${((1-yr)*100).toFixed(0)}% no</div></div>`;
       h+=prow("First 5 innings total","Projected",f5,tsd*Math.sqrt(5/9),1)+`</div>`;
-      h+=`<p class="sub">Starting pitchers aren't in this model and matter most for early-inning props, so check probables first.</p>`;
+      h+=`<p class="sub">Inning splits are team-level; the win chance includes the probable starters, but these early-inning numbers don't, so check who's pitching.</p>`;
     }
   } else if (PT==="team"){
     for (const [t,o,pts] of [[S.away,S.home,r.pa],[S.home,S.away,r.ph]]){
@@ -796,7 +809,7 @@ function renderProps(){
         for (const [st,v] of Object.entries(pl.props)){
           const lab=(D[sp].prop_labels||{})[st]||st, sd=v.kind==="count"?Math.sqrt(Math.max(v.phi*v.proj,0.05)):v.sd;
           const isHR=sp==="mlb";
-          h+=prow(lab, v.kind==="td"?(isHR?"Projected HRs ":"Projected TDs ")+v.proj.toFixed(2):"Projected", v.proj, sd, v.kind==="cont"?1:2, v.kind, isHR?"to homer":"to score", v.phi, pl.name);
+          h+=prow(lab, v.kind==="td"?(isHR?"Projected HRs ":"Projected TDs ")+v.proj.toFixed(2):(v.avg!=null?`Avg ${v.avg.toFixed(1)}, projected`:"Projected"), v.proj, sd, v.kind==="cont"?1:2, v.kind, isHR?"to homer":"to score", v.phi, pl.name, v.avg);
         }
         h+=`</div>`;
       }
@@ -879,6 +892,44 @@ function dayLabel(d){
   const t=D.today||"", dt=new Date(d+"T12:00:00"), td=new Date(t+"T12:00:00"), diff=Math.round((dt-td)/864e5);
   return diff===0?"Today":diff===1?"Tomorrow":dt.toLocaleDateString([], {weekday:"short", month:"short", day:"numeric"});
 }
+function propChance(v, line){
+  if (v.kind==="count") return 1-countCdf(Math.floor(line), v.proj, v.phi||1.2);
+  return pOver(v.proj, v.sd, line);
+}
+function renderTopProps(){
+  const out=[];
+  for (const sp of SPORTS){
+    for (const g of (D[sp].upcoming||[])){
+      if (g.date!==D.today || !g.props) continue;
+      for (const side of ["home","away"]) for (const pl of (g.props[side]||[])){
+        if (pl.status) continue;  // questionable / day-to-day: skip
+        for (const [st,v] of Object.entries(pl.props||{})){
+          if (v.kind==="td" || v.avg==null || !(v.proj>0)) continue;
+          if (sp==="mlb" && st==="strikeouts") continue;  // batter strikeout props aren't offered at your book
+          const line=defLine(v.avg), p=propChance(v,line), over=p>=0.5, q=over?p:1-p;
+          if (line<1 && v.proj<1) continue;  // skip near-zero lines books rarely post
+          const lab=(D[sp].prop_labels||{})[st]||st;
+          // rank by how far the projection moves the chance away from what the season average alone implies,
+          // so heavily juiced near-locks (under 1.5 hits) don't crowd out real disagreements
+          const pb=propChance({...v, proj:v.avg}, line), edge=over?p-pb:pb-p;
+          if (q<0.55) continue;
+          out.push({sp,g,side,name:pl.name,lab,line,over,q,edge,proj:v.proj,avg:v.avg,
+            id:`prop|${sp}|${g.away}@${g.home}|${pl.name} ${lab}`});
+        }
+      }
+    }
+  }
+  out.sort((a,b)=>b.edge-a.edge);
+  const L=out.slice(0,10); window._tp=L;
+  $("tpWrap").hidden=!L.length;
+  if (!L.length) return;
+  $("tprops").innerHTML=L.map((t,i)=>{const team=t.g[t.side], opp=t.g[t.side==="home"?"away":"home"], rt=t.q>=0.58?"green":t.q>=0.524?"yellow":"red";
+    return `<li><button class="main" data-i="${i}"><span class="n">${i+1}</span>
+      <span class="pk"><span class="dot r-${rt}"></span>${esc(t.name)} ${t.over?"over":"under"} ${t.line}</span><span class="pc">${Math.min(99,Math.round(t.q*100))}%</span>
+      <span class="mt">${esc(t.lab)}, ${esc(team)} vs ${esc(opp)}, ${esc(D[t.sp].label)}. Projected ${t.proj.toFixed(1)}, season avg ${t.avg.toFixed(1)}</span></button>
+      <button class="add" data-leg="${esc(t.id)}" data-j="${i}" aria-label="Add ${esc(t.name)} ${esc(t.lab)} to slip" aria-pressed="false">+</button></li>`;}).join("");
+  $("tpS").textContent="Ranked by how much the model's projection disagrees with the player's season average. Lines here are that average rounded to a half point, not your sportsbook's line. Books set sharper lines, so re-check the chance on the game's Players tab with the real number before betting. Players listed questionable are left out.";
+}
 function renderTop10(){
   const L=(D.top10||[]).filter(t=>D[t.sport]);
   $("tDate").textContent=new Date((D.today||"")+"T12:00:00").toLocaleDateString([], {weekday:"long", month:"long", day:"numeric"});
@@ -945,20 +996,25 @@ function renderBT(){
     }
     return h;
   };
+  const ss0=(D[sp].seasons||[]).find(r=>r.season==="All")||(D[sp].seasons||[]).slice(-1)[0];
+  const P1=x=>x!=null?(x*100).toFixed(1)+"%":"–";
   const READ={
-    nfl:"Tested on 917 games across four seasons, the model picks about 63% of winners. Starting-QB changes (about 2 points) and rest (about 0.2 points per day) are real, but Vegas already prices them in: against the spread it's at 48%, below the 52.4% break-even.",
-    cfb:"Adding Elo, recruiting talent, returning production, returning QBs, and travel made the model better every season: 73.7% winners over 2,669 games, up from 71.5%. Against the spread it's 50.9%, still short of the 52.4% needed to profit.",
-    nba:"Opening-week picks use 2025-26 ratings at full strength, which tested best on last season's openers, but they can't see offseason trades or injuries, so check rosters. No historical betting lines were available for the NBA, so this measures winners and margins only. Teams on the second night of a back-to-back score about 2.5 fewer points than the model expects, so shade those games when the season starts.",
-    mlb:"Baseball is the hardest sport to predict game by game, and this model rates teams without knowing the starting pitcher. Vegas typically picks MLB winners about 58-59% of the time."
+    nfl:ss0?`Tested walk-forward on ${ss0.games} games: ${P1(ss0.winner_pct)} winners. The ratings alone get ${P1(ss0.model_winner_pct)}; blending in the Vegas spread lifts that to about what the Vegas favorite wins (${P1(ss0.vegas_winner_pct)}). Green picks (70%+) won ${P1(ss0.green_pct)} of ${ss0.green_n}. Against the spread the ratings are at ${P1(ss0.ats_pct)}, under the 52.4% break-even, so spread leans are for information, not an edge. Totals: the ratings' over/under leans hit 48% against the Vegas total, so projected totals use the Vegas number when there is one.`:"",
+    cfb:ss0?`Tested walk-forward on ${ss0.games} FBS games: ${P1(ss0.winner_pct)} winners (ratings alone ${P1(ss0.model_winner_pct)}, Vegas favorite ${P1(ss0.vegas_winner_pct)}). Green picks (70%+) won ${P1(ss0.green_pct)} of ${ss0.green_n}. Against the spread it's ${P1(ss0.ats_pct)}, short of the 52.4% needed to profit. Over/under leans hit 49%, so projected totals use the Vegas number when there is one.`:"",
+    nba:ss0?`Tested walk-forward, refit every month: ${P1(ss0.winner_pct)} winners over ${ss0.games} games, up from ${P1(ss0.base_winner_pct)} for the ratings alone. The gain comes from lineup strength: who is actually playing compared with each team's recent norm (in testing this used who really played; live it uses the injury report, so late scratches can cost a little). Green picks won ${P1(ss0.green_pct)} of ${ss0.green_n}. No historical NBA lines were available to train on, so when today's moneyline is known the win chance leans 80/20 on the market: on this season's first 105 games the market picked 66.7% of winners to the ratings' 63.8%.`:"",
+    mlb:ss0?`Tested walk-forward on ${ss0.games} games: ${P1(ss0.winner_pct)} winners, up from ${P1(ss0.base_winner_pct)} for team ratings alone, by adding both starting pitchers. Baseball is the hardest sport to pick game by game; the Vegas favorite usually wins about 57-59%, so this is close to the ceiling. Green picks are rare in baseball (${ss0.green_n} in testing, ${P1(ss0.green_pct)} won).`:""
   };
   parts.push(`<div class="callout">${READ[sp]}</div>`);
   const ss=D[sp].seasons;
   if (ss && ss.length){
-    parts.push(`<h3>Tested on every season</h3><p class="sub" style="margin-bottom:8px">The full model, trained only on earlier seasons each time. ATS is betting the model\'s side of every spread; break-even is 52.4%. Miss is the average error on the final margin. "Ratings only" is winner accuracy without the game-context factors.</p><div class="scroll"><table><thead><tr><th>Season</th><th>Winners</th><th>ATS</th><th>Miss</th><th>Vegas</th><th>Ratings only</th><th>Games</th></tr></thead><tbody>${
-      ss.map(r=>`<tr${r.season==="All"?' style="font-weight:600"':""}><td>${r.season}</td><td>${(r.winner_pct*100).toFixed(1)}%</td><td class="${(r.ats_pct||0)>=0.524?"pos":"neg"}">${r.ats_pct!=null?(r.ats_pct*100).toFixed(1)+"%":"–"}</td><td>±${r.margin_mae.toFixed(1)}</td><td>${r.vegas_mae?"±"+r.vegas_mae.toFixed(1):"–"}</td><td>${(r.base_winner_pct*100).toFixed(1)}%</td><td>${r.games}</td></tr>`).join("")}</tbody></table></div>`);
+    const foot=sp==="nfl"||sp==="cfb";
+    parts.push(`<h3>Tested on every season</h3><p class="sub" style="margin-bottom:8px">${foot
+      ? `Each season is predicted using only models trained on earlier seasons. Winners is the full model with the Vegas spread blended in. Vegas fav is how often the betting favorite won. Ratings is the model without Vegas. Green is the hit rate on 70%+ picks. ATS is betting the ratings' side of every spread; break-even is 52.4%.`
+      : `Each game is predicted using only games played before it. Winners is the full model; Ratings is team ratings alone. Green is the hit rate on 70%+ picks. Brier measures probability accuracy (lower is better, 0.25 is a coin flip).`}</p><div class="scroll"><table><thead><tr><th>Season</th><th>Winners</th>${foot?"<th>Vegas fav</th>":""}<th>Ratings</th><th>Green</th>${foot?"<th>ATS</th>":"<th>Brier</th>"}<th>Games</th></tr></thead><tbody>${
+      ss.map(r=>`<tr${r.season==="All"?' style="font-weight:600"':""}><td>${r.season}</td><td>${P1(r.winner_pct)}</td>${foot?`<td>${P1(r.vegas_winner_pct)}</td>`:""}<td>${P1(foot?r.model_winner_pct:r.base_winner_pct)}</td><td>${r.green_pct!=null?P1(r.green_pct)+` <span class="mu">(${r.green_n})</span>`:"–"}</td>${foot?`<td class="${(r.ats_pct||0)>=0.524?"pos":"neg"}">${P1(r.ats_pct)}</td>`:`<td>${r.brier!=null?r.brier.toFixed(3):"–"}</td>`}<td>${r.games}</td></tr>`).join("")}</tbody></table></div>`);
     const st=D[sp].stack; if (st){
-      const L={pm:"Team ratings (per point)",rest_diff:"Each extra day of rest",qbc:"Backup or new QB starting",div_game:"Division game (home side)",elo_diff:"Elo gap (per point)",tal_diff:"Recruiting talent gap (per point)",rtp_diff:"Returning production gap (0-1)",rqb_diff:"Returning starting QB",travel:"Per 1,000 km of away travel",tal_diff_e:"Talent gap, weeks 1-4 extra",rtp_diff_e:"Returning production, weeks 1-4 extra"};
-      parts.push(`<h3>What moves the projection</h3><p class="sub" style="margin-bottom:8px">Points added to the home side's margin, learned from past seasons.</p><div class="scroll"><table><tbody>${Object.entries(st).map(([k,v])=>`<tr><td style="text-align:left">${L[k]||k}</td><td>${v>0?"+":""}${v.toFixed(k==="tal_diff"||k==="tal_diff_e"||k==="elo_diff"?3:2)}</td></tr>`).join("")}</tbody></table></div>`);
+      const L={lineup_diff:"Lineup strength vs usual (per game-score point)",sp_woba:"Starting pitcher gap, wOBA allowed",sp_fip:"Starting pitcher gap, FIP per batter",pm:"Team ratings (per point)",rest_diff:"Each extra day of rest",qbc:"Backup or new QB starting",div_game:"Division game (home side)",elo_diff:"Elo gap (per point)",tal_diff:"Recruiting talent gap (per point)",rtp_diff:"Returning production gap (0-1)",rqb_diff:"Returning starting QB",travel:"Per 1,000 km of away travel",tal_diff_e:"Talent gap, weeks 1-4 extra",rtp_diff_e:"Returning production, weeks 1-4 extra"};
+      parts.push(`<h3>What moves the projection</h3><p class="sub" style="margin-bottom:8px">${sp==="nba"||sp==="mlb"?"Logistic weights on the home side's win chance, learned from earlier games.":"Points added to the home side's margin, learned from past seasons."}</p><div class="scroll"><table><tbody>${Object.entries(st).map(([k,v])=>`<tr><td style="text-align:left">${L[k]||k}</td><td>${v>0?"+":""}${v.toFixed(k==="tal_diff"||k==="tal_diff_e"||k==="elo_diff"?3:2)}</td></tr>`).join("")}</tbody></table></div>`);
     }
   }
   const ps=D[sp].props_summary;
@@ -1068,6 +1124,11 @@ $("t10").onclick=e=>{
   if (add){ const t=L[+add.dataset.j]; toggleLeg(mlLeg(t.sport,t,t.pick,t.pick===t.home?t.away:t.home,t.conf)); return; }
   if (main){ const t=L[+main.dataset.i], g=(D[t.sport].upcoming||[]).find(x=>x.home===t.home&&x.away===t.away); openGame(t.sport,t.home,t.away,g&&g.neutral); }
 };
+$("tprops").onclick=e=>{
+  const L=window._tp||[], add=e.target.closest(".add"), main=e.target.closest(".main");
+  if (add){ const t=L[+add.dataset.j]; toggleLeg({id:t.id, label:`${t.name} ${t.lab} ${t.over?"over":"under"} ${t.line}`, sub:`${D[t.sp].label}, ${t.g.away} at ${t.g.home}`, p:t.q, game:`${t.sp}|${t.g.away}@${t.g.home}`}); return; }
+  if (main){ const t=L[+main.dataset.i]; PT="players"; PSIDE=t.side; MT="props"; $("m-props").hidden=false; $("m-break").hidden=true; openGame(t.sp,t.g.home,t.g.away,t.g.neutral); }
+};
 $("props").addEventListener("click",e=>{
   const b=e.target.closest(".add"); if(!b) return;
   let p, label;
@@ -1082,6 +1143,7 @@ $("props").addEventListener("click",e=>{
 
 setSport(SPORTS[0]);
 renderTop10();
+renderTopProps();
 renderSlip();
 const hashV=(location.hash||"").replace("#","");
 go(VIEWS.includes(hashV) ? hashV : (load("skp_view")||"today"));
